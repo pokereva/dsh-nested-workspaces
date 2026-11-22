@@ -47,9 +47,20 @@ child directory as their working directory, because they are created there.
 
 This plugin replaces the shipped workspace browser (it registers the same sidebar
 seat at a lower priority, which is the only way to own the section title and the
-row list). As a consequence the shipped **Rename** and **Delete** entries in the
-workspace context menu still appear but no longer open their dialog — use the
-row's `…` menu, or double-click the workspace title, instead.
+row list). A few things come with that trade:
+
+- Workspace rows carry this plugin's own menu instead of the shipped one: rename,
+  delete, new session and add child workspace all live there. Entries that other
+  plugins contribute to the *shipped* workspace context menu are not shown here.
+- The shipped per-row **pin** and **archive** hover buttons are gone. Session
+  pinning and per-session archiving stay available from the session's own `…`
+  menu, which is still the shipped menu.
+- The child seats the shipped browser used to expose
+  (`sidebar.workspaces.directoryFlow`, `sidebar.workspaces.session.row.action`,
+  `sidebar.session.row.leading`, `sidebar.session.row.trailing`,
+  `sidebar.session.row.hover`) are not rendered on these rows, so additions other
+  plugins place in them will not appear inside this section. The session `…` menu
+  is unaffected and remains the supported extension point.
 
 ## Using it
 

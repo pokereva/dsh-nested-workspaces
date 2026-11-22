@@ -57,6 +57,10 @@ const hookLogByComponent = new Map();
  * rules-of-hooks violation. */
 let activeSequence = null;
 const componentSequences = [];
+/* Component type identities seen during the last pass: a row component declared
+ * inside Sidebar gets a NEW identity every render, which remounts every row and
+ * drops focus. The identity must be stable across passes. */
+const identityLog = [];
 
 function recordHook(name) {
   hookCalls.push(name);
@@ -484,6 +488,7 @@ function walk(node) {
       const sequence = [];
       renderingComponent = node.type;
       activeSequence = sequence;
+      if (node.type.name === `SessionRow` || node.type.name === `WorkspaceGroup`) identityLog.push(node.type);
       try {
         walk(node.type(node.props));
       } finally {
@@ -548,6 +553,7 @@ function renderOnce(renderProps) {
   hookCalls.length = 0;
   hookLogByComponent.clear();
   componentSequences.length = 0;
+  identityLog.length = 0;
   let rendered = null;
   let error = null;
   const previous = renderingComponent;
@@ -566,6 +572,7 @@ function renderOnce(renderProps) {
     error,
     sidebarHooks: (hookLogByComponent.get('Sidebar') || []).slice(),
     sequences: componentSequences.map((entry) => ({ name: entry.name, hooks: entry.hooks })),
+    identities: Array.from(new Set(identityLog)),
     hookCount: hookCalls.length,
   };
 }
@@ -638,6 +645,17 @@ check(
   'row access hooks are attributed to the row components, not the sidebar',
   !bigPass.sidebarHooks.some((hook) => /Access$/.test(hook)),
   bigPass.sidebarHooks.join(','),
+);
+
+/* A row component declared inside Sidebar is a new function object on every
+ * render, so React unmounts and remounts every row whenever the sidebar
+ * re-renders (menu open, drag over, each keystroke) and focus is lost. The
+ * component identity must therefore be identical across two separate passes. */
+const sharedIdentities = smallPass.identities.filter((type) => bigPass.identities.indexOf(type) >= 0);
+check(
+  'row components keep one identity across renders (no remount churn)',
+  smallPass.identities.length > 0 && sharedIdentities.length === smallPass.identities.length,
+  'small=' + smallPass.identities.length + ' shared=' + sharedIdentities.length,
 );
 
 /* ------------------------------------------------------------ summary print */

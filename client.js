@@ -461,11 +461,6 @@ window.__ModuleLoader__.load({
           }
         }
 
-        const headingText = () => {
-          const custom = store.get().title
-          return custom === null ? t('heading.default') : custom
-        }
-
         /* ------------------------------------------------------- context menus */
 
         ctx.effect(
@@ -551,11 +546,10 @@ window.__ModuleLoader__.load({
         function NewWorkspaceDialog(props) {
           const request = props.request
           const isChild = typeof request.parentPath === 'string'
-          const [value, setValue] = useState(isChild ? '' : '')
+          const [value, setValue] = useState('')
           const [busy, setBusy] = useState(false)
           const [error, setError] = useState(null)
           const inputRef = useRef(null)
-          const commitRef = useRef(null)
 
           useEffect(() => {
             const element = inputRef.current
@@ -565,16 +559,8 @@ window.__ModuleLoader__.load({
             }
           }, [isChild])
 
-          useEffect(() => {
-            const onKeyDown = event => {
-              if (event.key === 'Escape') {
-                event.stopPropagation()
-                props.onClose()
-              }
-            }
-            document.addEventListener('keydown', onKeyDown, true)
-            return () => document.removeEventListener('keydown', onKeyDown, true)
-          }, [props.onClose])
+          /* Escape belongs to DialogShell, which ignores it while busy — a second
+           * listener here would close the dialog mid-create and orphan the directory. */
 
           const describe = failure => {
             const code = failure !== null && typeof failure === 'object' && typeof failure.code === 'string' ? failure.code : ''
@@ -629,7 +615,6 @@ window.__ModuleLoader__.load({
               setBusy(false)
             }
           }
-          commitRef.current = submit
 
           return h(
             DialogShell,
@@ -676,6 +661,10 @@ window.__ModuleLoader__.load({
         function MenuPopover(props) {
           const { anchor, items, onClose } = props
           const [index, setIndex] = useState(0)
+          /* Mirror of `index` for the listener effect: keyboard navigation must not
+           * rebind three document listeners on every arrow press. */
+          const indexRef = useRef(0)
+          indexRef.current = index
           const popoverRef = useRef(null)
           const itemRefs = useRef([])
           const restoreRef = useRef(null)
@@ -721,7 +710,7 @@ window.__ModuleLoader__.load({
               if (event.key === 'Enter' || event.key === ' ') {
                 const active = document.activeElement
                 const position = itemRefs.current.findIndex(node => node === active)
-                const chosen = position >= 0 ? items[position] : items[index]
+                const chosen = position >= 0 ? items[position] : items[indexRef.current]
                 if (chosen === undefined || chosen.disabled === true) return
                 event.preventDefault()
                 onClose()
@@ -736,7 +725,7 @@ window.__ModuleLoader__.load({
               document.removeEventListener('keydown', onKeyDown, true)
               window.removeEventListener('resize', onClose)
             }
-          }, [items, index, onClose])
+          }, [items, onClose])
 
           /* Focus the active row, and give focus back to whatever opened the
            * menu when it closes, so keyboard users are never stranded. */
@@ -758,9 +747,19 @@ window.__ModuleLoader__.load({
           const portalTarget = typeof document === 'undefined' ? null : document.body
           if (portalTarget === null) return null
 
+          /* Keep the menu on screen: flip above the anchor when the space below is
+           * too small, then clamp both axes into the viewport. */
+          const MENU_WIDTH = 208
+          const viewportHeight = window.innerHeight || 0
+          const viewportWidth = window.innerWidth || 0
+          const estimated = items.length * 34 + 12
+          const below = anchor.bottom + 4
+          const above = anchor.top - 4 - estimated
+          const fitsBelow = viewportHeight === 0 || below + estimated <= viewportHeight
+          const top = fitsBelow ? below : Math.max(8, above)
           const style = {
-            top: Math.round(anchor.bottom + 4) + 'px',
-            left: Math.round(Math.max(8, Math.min(anchor.left, (window.innerWidth || 0) - 200))) + 'px',
+            top: Math.round(Math.max(8, Math.min(top, viewportHeight === 0 ? top : viewportHeight - estimated - 8))) + 'px',
+            left: Math.round(Math.max(8, Math.min(anchor.left, (viewportWidth || MENU_WIDTH) - MENU_WIDTH))) + 'px',
           }
 
           return createPortal(
@@ -1003,6 +1002,286 @@ window.__ModuleLoader__.load({
           })
         }
 
+        /* --------------------------------------------------------- row components
+         *
+         * These are components rather than render helpers on purpose: each one calls
+         * React hooks (useSessionAccess / useWorkspaceAccess), so it must own a stable
+         * hook list. Calling them from Sidebar's body made the hook count depend on
+         * collapse state and filters, which breaks the rules of hooks and blanks the
+         * whole sidebar entry. Shared closures arrive in `env`, built once per render.
+         */
+        function SessionRow(props) {
+          const { session, groupKey, index, bucket, env } = props
+          const { view, statuses, t, uiWorkspace, useSessionAccess, openMenu, assignSession, dragIdRef, draggingId, dropTarget, setDropTarget, setDraggingId } = env
+          const isArchived = view.archived.has(session.id)
+          const label = session.blank ? (session.id === view.currentId ? t('session.new') : t('session.untitled')) : sessionTitle(session)
+          const title = label === '' ? t('session.untitled') : label
+          const status = statuses.get(session.id)
+          const running = status !== undefined && status.running === true
+          const selected = session.id === view.currentId
+          const canUnarchive = useSessionAccess(session.id, 'workspace/unarchiveSession')
+          const canMove = useSessionAccess(session.id, 'workspace/insertSessionBefore')
+          const canDrag = !session.blank && !isArchived && canMove
+          const rowDropPosition = dropTarget !== null && dropTarget.sessionId === session.id ? dropTarget.position : null
+          const actions = []
+          if (!session.blank && !isArchived) {
+            actions.push(
+              openMenu(
+                { kind: 'session', value: { sessionId: session.id, displayTitle: title } },
+                t('actions.menu') + ' ' + title,
+              ),
+            )
+          }
+          if (isArchived && canUnarchive) {
+            actions.push(
+              h(
+                'button',
+                {
+                  type: 'button',
+                  key: 'unarchive',
+                  className: 'dnw-iconButton',
+                  title: t('actions.unarchive'),
+                  'aria-label': t('actions.unarchive') + ' ' + title,
+                  onClick: event => {
+                    event.stopPropagation()
+                    uiWorkspace.unarchiveSession(session.id)
+                  },
+                },
+                h(IconUnarchive, null),
+              ),
+            )
+          }
+          const activate = () => {
+            if (isArchived) return
+            uiWorkspace.openSession(session.id)
+          }
+          /* The next sibling in this bucket is the insertion anchor for an
+           * "after" drop. It skips the row being dragged, otherwise dropping a
+           * row right below the one above it would move it to the group end. */
+          const dropAfter = (() => {
+            if (!Array.isArray(bucket) || typeof index !== 'number') return undefined
+            for (let cursor = index + 1; cursor < bucket.length; cursor += 1) {
+              if (bucket[cursor].id !== draggingId) return bucket[cursor].id
+            }
+            return undefined
+          })()
+          return h(
+            'div',
+            {
+              key: 's:' + session.id,
+              className: cls(
+                'dnw-row',
+                'dnw-sessionRow',
+                selected && 'dnw-rowSelected',
+                isArchived && 'dnw-rowArchived',
+                rowDropPosition === 'before' && 'dnw-dropBefore',
+                rowDropPosition === 'after' && 'dnw-dropAfter',
+                draggingId === session.id && 'dnw-rowDragging',
+              ),
+              role: 'treeitem',
+              tabIndex: 0,
+              'aria-selected': selected,
+              'data-row-key': 'nested-session:' + session.id,
+              draggable: canDrag,
+              onKeyDown: event => {
+                if (event.key !== 'Enter' && event.key !== ' ') return
+                event.preventDefault()
+                activate()
+              },
+              onDragStart: event => {
+                dragIdRef.current = session.id
+                setDraggingId(session.id)
+                try {
+                  event.dataTransfer.effectAllowed = 'move'
+                  event.dataTransfer.setData('text/plain', session.id)
+                } catch {
+                  /* some browsers block custom payloads; the ref carries the id */
+                }
+              },
+              onDragEnd: () => {
+                dragIdRef.current = null
+                setDraggingId(null)
+                setDropTarget(null)
+              },
+              onDragOver: event => {
+                const dragging = dragIdRef.current
+                if (dragging === null || dragging === session.id) return
+                event.preventDefault()
+                event.stopPropagation()
+                try {
+                  event.dataTransfer.dropEffect = 'move'
+                } catch {
+                  /* ignore */
+                }
+                const box = event.currentTarget.getBoundingClientRect()
+                const position = event.clientY < box.top + box.height / 2 ? 'before' : 'after'
+                if (rowDropPosition !== position) setDropTarget({ workspaceId: groupKey, sessionId: session.id, position })
+              },
+              onDragLeave: event => {
+                if (event.currentTarget.contains(event.relatedTarget)) return
+                if (rowDropPosition !== null) setDropTarget(null)
+              },
+              onDrop: event => {
+                const id = dragIdRef.current || event.dataTransfer.getData('text/plain')
+                if (!id || id === session.id) return
+                event.preventDefault()
+                event.stopPropagation()
+                const box = event.currentTarget.getBoundingClientRect()
+                const after = event.clientY >= box.top + box.height / 2
+                setDropTarget(null)
+                dragIdRef.current = null
+                setDraggingId(null)
+                assignSession(id, groupKey, after ? dropAfter : session.id)
+              },
+              onClick: activate,
+            },
+            h(
+              'span',
+              { className: 'dnw-slot' },
+              running ? h('span', { className: 'dnw-dot' }) : h('span', { className: cls('dnw-dot', 'dnw-dotIdle') }),
+            ),
+            h('span', { className: cls('dnw-title', (session.blank || isArchived) && 'dnw-titleMuted') }, title),
+            actions.length === 0 ? null : h('span', { className: 'dnw-actions' }, ...actions),
+          )
+        }
+
+        function WorkspaceGroup(props) {
+          const { workspace, depth, env } = props
+          const { view, state, t, uiWorkspace, useWorkspaceAccess, openMenu, openWorkspaceMenu, assignSession, setExpanded, setRenaming, menu, dragIdRef, draggingId, dropTarget, setDropTarget, setDraggingId } = env
+          const workspaceId = workspace.workspaceId
+          const collapsed = state.collapsed[workspaceId] === true
+          const members = view.members.get(workspaceId) || []
+          const children = view.childrenOf.get(workspaceId) || []
+          const hasSessions = members.length > 0
+          const visible = !collapsed || view.filtering
+          /* Only a header-level hover highlights the group; a hover over one
+           * of its session rows carries a sessionId and must not repaint it. */
+          const isDropTarget =
+            dropTarget !== null && dropTarget.workspaceId === workspaceId && dropTarget.sessionId === undefined
+          const indent = { '--dnw-indent': depth * INDENT_PX + 'px' }
+          const canCreateSession = useWorkspaceAccess(workspaceId, 'session/create')
+          const collapsible = children.length > 0 || hasSessions
+          const row = h(
+            'div',
+            {
+              key: 'w:' + workspaceId,
+              className: cls('dnw-row', 'dnw-workspaceRow', isDropTarget && 'dnw-dropOn'),
+              role: 'treeitem',
+              tabIndex: 0,
+              'aria-expanded': !collapsed,
+              'aria-label': workspace.title + ' — ' + workspace.path,
+              style: indent,
+              onClick: () => setExpanded(workspaceId, collapsed),
+              onKeyDown: event => {
+                if (event.target !== event.currentTarget) return
+                if (event.key !== 'Enter' && event.key !== ' ') return
+                event.preventDefault()
+                setExpanded(workspaceId, collapsed)
+              },
+              onContextMenu: event => openWorkspaceMenu(event, workspace),
+              onDragOver: event => {
+                if (dragIdRef.current === null) return
+                event.preventDefault()
+                event.stopPropagation()
+                try {
+                  event.dataTransfer.dropEffect = 'move'
+                } catch {
+                  /* ignore */
+                }
+                if (!isDropTarget) setDropTarget({ workspaceId, mode: 'into' })
+              },
+              onDragLeave: event => {
+                /* Moving onto a child span fires leave on the header; only an
+                 * exit from the header itself clears the drop highlight. */
+                if (event.currentTarget.contains(event.relatedTarget)) return
+                if (isDropTarget) setDropTarget(null)
+              },
+              onDrop: event => {
+                const id = dragIdRef.current || event.dataTransfer.getData('text/plain')
+                event.preventDefault()
+                event.stopPropagation()
+                setDropTarget(null)
+                setDraggingId(null)
+                dragIdRef.current = null
+                if (id) assignSession(id, workspaceId, undefined)
+              },
+            },
+            h(
+              'span',
+              { className: 'dnw-slot dnw-lead' },
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: cls('dnw-chevron', !collapsed && 'dnw-chevronOpen'),
+                  'aria-label': (collapsed ? t('expandGroup') : t('collapseGroup')) + ' ' + workspace.title,
+                  'aria-hidden': !collapsible,
+                  tabIndex: collapsible ? 0 : -1,
+                  onClick: event => {
+                    event.stopPropagation()
+                    setExpanded(workspaceId, collapsed)
+                  },
+                },
+                h('span', { className: 'dnw-arrowInner' }, h(IconChevron, null)),
+              ),
+              h('span', { className: cls('dnw-folderIcon', !collapsed && 'dnw-folderActive') }, h(IconFolder, null)),
+            ),
+            h(
+              'span',
+              {
+                className: 'dnw-title',
+                title: workspace.path,
+                onDoubleClick: event => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setRenaming(workspace)
+                },
+              },
+              workspace.title,
+            ),
+            h(
+              'span',
+              { className: cls('dnw-actions', menu !== null && menu.workspaceId === workspaceId && 'dnw-actionsOpen') },
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dnw-iconButton',
+                  title: t('actions.menu'),
+                  'aria-label': t('actions.menu') + ' ' + workspace.title,
+                  'aria-haspopup': 'menu',
+                  'aria-expanded': menu !== null && menu.workspaceId === workspaceId,
+                  onClick: event => openWorkspaceMenu(event, workspace),
+                },
+                h(IconDots, null),
+              ),
+              canCreateSession
+                ? h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'dnw-iconButton',
+                      title: t('actions.newSession'),
+                      'aria-label': t('actions.newSession') + ' ' + workspace.title,
+                      onClick: event => {
+                        event.stopPropagation()
+                        uiWorkspace.startSession(workspaceId)
+                      },
+                    },
+                    h(IconPlus, null),
+                  )
+                : null,
+            ),
+          )
+
+          const body = []
+          if (visible && hasSessions) body.push(h('div', { key: 'g:' + workspaceId, role: 'group' }, members.map((session, index) => h(SessionRow, { key: 's:' + session.id, session, groupKey: workspaceId, index, bucket: members, env }))))
+          if (visible) {
+            for (const child of children) body.push(h(WorkspaceGroup, { key: 'grp:' + child.workspaceId, workspace: child, depth: depth + 1, env }))
+          }
+          return h(Fragment, { key: 'grp:' + workspaceId }, row, ...body)
+        }
+
         /* ------------------------------------------------------------- sidebar */
 
         function Sidebar(props) {
@@ -1182,42 +1461,42 @@ window.__ModuleLoader__.load({
           const menuWorkspace =
             menu === null ? null : items.find(item => item.workspaceId === menu.workspaceId) || null
 
-          const menuItems =
-            menuWorkspace === null
-              ? []
-              : [
-                  {
-                    id: 'addChild',
-                    label: t('menu.addChild'),
-                    icon: IconFolderPlus,
-                    onSelect: () =>
-                      addChildRequest.set({
-                        parentId: menuWorkspace.workspaceId,
-                        parentPath: menuWorkspace.path,
-                        parentTitle: menuWorkspace.title,
-                      }),
-                  },
-                  {
-                    id: 'newSession',
-                    label: t('actions.newSession'),
-                    icon: IconPlus,
-                    onSelect: () => uiWorkspace.startSession(menuWorkspace.workspaceId),
-                  },
-                  {
-                    id: 'rename',
-                    label: t('actions.rename'),
-                    icon: IconEdit,
-                    separatorBefore: true,
-                    onSelect: () => setRenaming(menuWorkspace),
-                  },
-                  {
-                    id: 'delete',
-                    label: t('actions.delete'),
-                    icon: IconTrash,
-                    danger: true,
-                    onSelect: () => setDeleting(menuWorkspace),
-                  },
-                ]
+          const menuItems = useMemo(() => {
+            if (menuWorkspace === null) return []
+            return [
+              {
+                id: 'addChild',
+                label: t('menu.addChild'),
+                icon: IconFolderPlus,
+                onSelect: () =>
+                  addChildRequest.set({
+                    parentId: menuWorkspace.workspaceId,
+                    parentPath: menuWorkspace.path,
+                    parentTitle: menuWorkspace.title,
+                  }),
+              },
+              {
+                id: 'newSession',
+                label: t('actions.newSession'),
+                icon: IconPlus,
+                onSelect: () => uiWorkspace.startSession(menuWorkspace.workspaceId),
+              },
+              {
+                id: 'rename',
+                label: t('actions.rename'),
+                icon: IconEdit,
+                separatorBefore: true,
+                onSelect: () => setRenaming(menuWorkspace),
+              },
+              {
+                id: 'delete',
+                label: t('actions.delete'),
+                icon: IconTrash,
+                danger: true,
+                onSelect: () => setDeleting(menuWorkspace),
+              },
+            ]
+          }, [menuWorkspace, t, uiWorkspace])
 
           const commitTitle = () => {
             /* Escape sets the cancel flag first; the input then unmounts and its
@@ -1266,284 +1545,6 @@ window.__ModuleLoader__.load({
             )
           }
 
-        /* --------------------------------------------------------- row components
-         *
-         * These are components rather than render helpers on purpose: each one calls
-         * React hooks (useSessionAccess / useWorkspaceAccess), so it must own a stable
-         * hook list. Calling them from Sidebar's body made the hook count depend on
-         * collapse state and filters, which breaks the rules of hooks and blanks the
-         * whole sidebar entry. Shared closures arrive in `env`, built once per render.
-         */
-        function SessionRow(props) {
-          const { session, groupKey, index, bucket, env } = props
-          const { view, statuses, t, uiWorkspace, useSessionAccess, openMenu, assignSession, dragIdRef, draggingId, dropTarget, setDropTarget, setDraggingId } = env
-          const isArchived = view.archived.has(session.id)
-          const label = session.blank ? (session.id === view.currentId ? t('session.new') : t('session.untitled')) : sessionTitle(session)
-          const title = label === '' ? t('session.untitled') : label
-          const status = statuses.get(session.id)
-          const running = status !== undefined && status.running === true
-          const selected = session.id === view.currentId
-          const canUnarchive = useSessionAccess(session.id, 'workspace/unarchiveSession')
-          const canMove = useSessionAccess(session.id, 'workspace/insertSessionBefore')
-          const canDrag = !session.blank && !isArchived && canMove
-          const rowDropPosition = dropTarget !== null && dropTarget.sessionId === session.id ? dropTarget.position : null
-          const actions = []
-          if (!session.blank && !isArchived) {
-            actions.push(
-              openMenu(
-                { kind: 'session', value: { sessionId: session.id, displayTitle: title } },
-                t('actions.menu') + ' ' + title,
-              ),
-            )
-          }
-          if (isArchived && canUnarchive) {
-            actions.push(
-              h(
-                'button',
-                {
-                  type: 'button',
-                  key: 'unarchive',
-                  className: 'dnw-iconButton',
-                  title: t('actions.unarchive'),
-                  'aria-label': t('actions.unarchive') + ' ' + title,
-                  onClick: event => {
-                    event.stopPropagation()
-                    uiWorkspace.unarchiveSession(session.id)
-                  },
-                },
-                h(IconUnarchive, null),
-              ),
-            )
-          }
-          const activate = () => {
-            if (isArchived) return
-            uiWorkspace.openSession(session.id)
-          }
-          /* The next sibling in this bucket is the insertion anchor for an
-           * "after" drop. It skips the row being dragged, otherwise dropping a
-           * row right below the one above it would move it to the group end. */
-          const dropAfter = (() => {
-            if (!Array.isArray(bucket) || typeof index !== 'number') return undefined
-            for (let cursor = index + 1; cursor < bucket.length; cursor += 1) {
-              if (bucket[cursor].id !== draggingId) return bucket[cursor].id
-            }
-            return undefined
-          })()
-          return h(
-            'div',
-            {
-              key: 's:' + session.id,
-              className: cls(
-                'dnw-row',
-                'dnw-sessionRow',
-                selected && 'dnw-rowSelected',
-                isArchived && 'dnw-rowArchived',
-                rowDropPosition === 'before' && 'dnw-dropBefore',
-                rowDropPosition === 'after' && 'dnw-dropAfter',
-                draggingId === session.id && 'dnw-rowDragging',
-              ),
-              role: 'treeitem',
-              tabIndex: 0,
-              'aria-selected': selected,
-              'data-row-key': 'nested-session:' + session.id,
-              draggable: canDrag,
-              onKeyDown: event => {
-                if (event.key !== 'Enter' && event.key !== ' ') return
-                event.preventDefault()
-                activate()
-              },
-              onDragStart: event => {
-                dragIdRef.current = session.id
-                setDraggingId(session.id)
-                try {
-                  event.dataTransfer.effectAllowed = 'move'
-                  event.dataTransfer.setData('text/plain', session.id)
-                } catch {
-                  /* some browsers block custom payloads; the ref carries the id */
-                }
-              },
-              onDragEnd: () => {
-                dragIdRef.current = null
-                setDraggingId(null)
-                setDropTarget(null)
-              },
-              onDragOver: event => {
-                const dragging = dragIdRef.current
-                if (dragging === null || dragging === session.id) return
-                event.preventDefault()
-                event.stopPropagation()
-                try {
-                  event.dataTransfer.dropEffect = 'move'
-                } catch {
-                  /* ignore */
-                }
-                const box = event.currentTarget.getBoundingClientRect()
-                const position = event.clientY < box.top + box.height / 2 ? 'before' : 'after'
-                if (rowDropPosition !== position) setDropTarget({ workspaceId: groupKey, sessionId: session.id, position })
-              },
-              onDragLeave: event => {
-                if (event.currentTarget.contains(event.relatedTarget)) return
-                if (rowDropPosition !== null) setDropTarget(null)
-              },
-              onDrop: event => {
-                const id = dragIdRef.current || event.dataTransfer.getData('text/plain')
-                if (!id || id === session.id) return
-                event.preventDefault()
-                event.stopPropagation()
-                const box = event.currentTarget.getBoundingClientRect()
-                const after = event.clientY >= box.top + box.height / 2
-                setDropTarget(null)
-                dragIdRef.current = null
-                setDraggingId(null)
-                assignSession(id, groupKey, after ? dropAfter : session.id)
-              },
-              onClick: activate,
-              onDoubleClick: activate,
-            },
-            h(
-              'span',
-              { className: 'dnw-slot' },
-              running ? h('span', { className: 'dnw-dot' }) : h('span', { className: cls('dnw-dot', 'dnw-dotIdle') }),
-            ),
-            h('span', { className: cls('dnw-title', (session.blank || isArchived) && 'dnw-titleMuted') }, title),
-            actions.length === 0 ? null : h('span', { className: 'dnw-actions' }, ...actions),
-          )
-        }
-
-        function WorkspaceGroup(props) {
-          const { workspace, depth, env } = props
-          const { view, state, t, uiWorkspace, useWorkspaceAccess, openMenu, openWorkspaceMenu, assignSession, setExpanded, setRenaming, menu, dragIdRef, draggingId, dropTarget, setDropTarget, setDraggingId } = env
-          const workspaceId = workspace.workspaceId
-          const collapsed = state.collapsed[workspaceId] === true
-          const members = view.members.get(workspaceId) || []
-          const children = view.childrenOf.get(workspaceId) || []
-          const hasSessions = members.length > 0
-          const visible = !collapsed || view.filtering
-          /* Only a header-level hover highlights the group; a hover over one
-           * of its session rows carries a sessionId and must not repaint it. */
-          const isDropTarget =
-            dropTarget !== null && dropTarget.workspaceId === workspaceId && dropTarget.sessionId === undefined
-          const indent = { '--dnw-indent': depth * INDENT_PX + 'px' }
-          const canCreateSession = useWorkspaceAccess(workspaceId, 'session/create')
-          const collapsible = children.length > 0 || hasSessions
-          const row = h(
-            'div',
-            {
-              key: 'w:' + workspaceId,
-              className: cls('dnw-row', 'dnw-workspaceRow', isDropTarget && 'dnw-dropOn'),
-              role: 'treeitem',
-              tabIndex: 0,
-              'aria-expanded': !collapsed,
-              'aria-label': workspace.title + ' — ' + workspace.path,
-              style: indent,
-              onClick: () => setExpanded(workspaceId, collapsed),
-              onKeyDown: event => {
-                if (event.target !== event.currentTarget) return
-                if (event.key !== 'Enter' && event.key !== ' ') return
-                event.preventDefault()
-                setExpanded(workspaceId, collapsed)
-              },
-              onContextMenu: event => openWorkspaceMenu(event, workspace),
-              onDragOver: event => {
-                if (dragIdRef.current === null) return
-                event.preventDefault()
-                event.stopPropagation()
-                try {
-                  event.dataTransfer.dropEffect = 'move'
-                } catch {
-                  /* ignore */
-                }
-                if (!isDropTarget) setDropTarget({ workspaceId, mode: 'into' })
-              },
-              onDragLeave: () => {
-                if (isDropTarget) setDropTarget(null)
-              },
-              onDrop: event => {
-                const id = dragIdRef.current || event.dataTransfer.getData('text/plain')
-                event.preventDefault()
-                event.stopPropagation()
-                setDropTarget(null)
-                setDraggingId(null)
-                dragIdRef.current = null
-                if (id) assignSession(id, workspaceId, undefined)
-              },
-            },
-            h(
-              'span',
-              { className: 'dnw-slot dnw-lead' },
-              h(
-                'button',
-                {
-                  type: 'button',
-                  className: cls('dnw-chevron', !collapsed && 'dnw-chevronOpen'),
-                  'aria-label': (collapsed ? t('expandGroup') : t('collapseGroup')) + ' ' + workspace.title,
-                  'aria-hidden': !collapsible,
-                  tabIndex: collapsible ? 0 : -1,
-                  onClick: event => {
-                    event.stopPropagation()
-                    setExpanded(workspaceId, collapsed)
-                  },
-                },
-                h('span', { className: 'dnw-arrowInner' }, h(IconChevron, null)),
-              ),
-              h('span', { className: cls('dnw-folderIcon', !collapsed && 'dnw-folderActive') }, h(IconFolder, null)),
-            ),
-            h(
-              'span',
-              {
-                className: 'dnw-title',
-                title: workspace.path,
-                onDoubleClick: event => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  setRenaming(workspace)
-                },
-              },
-              workspace.title,
-            ),
-            h(
-              'span',
-              { className: cls('dnw-actions', menu !== null && menu.workspaceId === workspaceId && 'dnw-actionsOpen') },
-              h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'dnw-iconButton',
-                  title: t('actions.menu'),
-                  'aria-label': t('actions.menu') + ' ' + workspace.title,
-                  'aria-haspopup': 'menu',
-                  'aria-expanded': menu !== null && menu.workspaceId === workspaceId,
-                  onClick: event => openWorkspaceMenu(event, workspace),
-                },
-                h(IconDots, null),
-              ),
-              canCreateSession
-                ? h(
-                    'button',
-                    {
-                      type: 'button',
-                      className: 'dnw-iconButton',
-                      title: t('actions.newSession'),
-                      'aria-label': t('actions.newSession') + ' ' + workspace.title,
-                      onClick: event => {
-                        event.stopPropagation()
-                        uiWorkspace.startSession(workspaceId)
-                      },
-                    },
-                    h(IconPlus, null),
-                  )
-                : null,
-            ),
-          )
-
-          const body = []
-          if (visible && hasSessions) body.push(h('div', { key: 'g:' + workspaceId, role: 'group' }, members.map((session, index) => h(SessionRow, { key: 's:' + session.id, session, groupKey: workspaceId, index, bucket: members, env }))))
-          if (visible) {
-            for (const child of children) body.push(h(WorkspaceGroup, { key: 'grp:' + child.workspaceId, workspace: child, depth: depth + 1, env }))
-          }
-          return h(Fragment, { key: 'grp:' + workspaceId }, row, ...body)
-        }
-
           /* One bag of closures for the row components; rebuilt each render. */
           const env = {
             view, state, statuses, t, uiWorkspace,
@@ -1583,7 +1584,8 @@ window.__ModuleLoader__.load({
                     event.stopPropagation()
                     if (!isUngroupedDrop) setDropTarget({ workspaceId: UNGROUPED, mode: 'into' })
                   },
-                  onDragLeave: () => {
+                  onDragLeave: event => {
+                    if (event.currentTarget.contains(event.relatedTarget)) return
                     if (isUngroupedDrop) setDropTarget(null)
                   },
                   onDrop: event => {

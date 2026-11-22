@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36" role="img" aria-label="Nested workspaces">
+  <rect x="2" y="2" width="32" height="32" rx="8" fill="#247bbf" fill-opacity="0.14"/>
+  <path d="M5 23.6V13.4a2 2 0 0 1 2-2h4.6l1.7 2.2h13.7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2z"
+        fill="none" stroke="#247bbf" stroke-width="2.2" stroke-linejoin="round"/>
+  <path d="M14.6 22.2v-3.9a1.5 1.5 0 0 1 1.5-1.5h2.6l1.1 1.4h4.6a1.5 1.5 0 0 1 1.5 1.5v2.5a1.5 1.5 0 0 1-1.5 1.5h-8.3a1.5 1.5 0 0 1-1.5-1.5z"
+        fill="#247bbf" fill-opacity="0.9"/>
+</svg>

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Nested workspaces",
+    "description": "Turn the sidebar into a workspace tree. Double-click the section title to rename it, right-click any workspace to add a child workspace created inside that workspace's directory, and drag sessions between workspaces to file them where you work on them. Child workspaces keep their own menu and new-session button."
+  }
+}

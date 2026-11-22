@@ -1,0 +1,3 @@
+- insert:
+    - id: dsh-nested-workspaces
+      name: 'dsh-nested-workspaces'

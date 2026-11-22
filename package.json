@@ -1,0 +1,59 @@
+{
+  "name": "dsh-nested-workspaces",
+  "version": "1.0.0",
+  "private": false,
+  "type": "module",
+  "description": "Nested child workspaces in the DeepSeek Harness sidebar: editable section title, an Add child workspace menu, and sessions you can drag between workspaces.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "sidebar",
+    "workspace",
+    "session"
+  ],
+  "license": "MIT",
+  "author": "poker",
+  "homepage": "https://github.com/pokereva/dsh-nested-workspaces#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pokereva/dsh-nested-workspaces.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pokereva/dsh-nested-workspaces/issues"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node test/harness.cjs",
+    "check": "node --check client.js && node --check index.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-context-menu",
+        "@deepseek-ai/dsh-client-ui-workspace"
+      ]
+    }
+  }
+}

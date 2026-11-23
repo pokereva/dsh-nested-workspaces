@@ -70,6 +70,19 @@ window.__ModuleLoader__.load({
         'ungrouped': '未分组',
         'empty': '暂无会话',
         'search.empty': '没有匹配结果',
+        'time.now': '刚刚',
+        'time.minutes': '{n}分钟',
+        'time.hours': '{n}小时',
+        'time.days': '{n}天',
+        'time.months': '{n}个月',
+        'time.years': '{n}年',
+        'time.ago': '{t}前',
+        'actions.pin': '置顶',
+        'actions.unpin': '取消置顶',
+        'row.pinned': '已置顶',
+        'errors.pinFailed': '置顶状态更新失败',
+        'errors.invalidParent': 'The parent workspace directory is not usable.',
+        'errors.unreadable': 'The new directory could not be read.',
       },
       en: {
         'heading.default': 'Workspaces',
@@ -116,6 +129,19 @@ window.__ModuleLoader__.load({
         'ungrouped': 'Ungrouped',
         'empty': 'No sessions',
         'search.empty': 'No matches',
+        'time.now': 'now',
+        'time.minutes': '{n}min',
+        'time.hours': '{n}h',
+        'time.days': '{n}d',
+        'time.months': '{n}mo',
+        'time.years': '{n}y',
+        'time.ago': '{t} ago',
+        'actions.pin': 'Pin',
+        'actions.unpin': 'Unpin',
+        'row.pinned': 'Pinned',
+        'errors.pinFailed': 'Could not update the pin',
+        'errors.invalidParent': 'The parent workspace directory is not usable.',
+        'errors.unreadable': 'The new directory could not be read.',
       },
       ja: {
         'heading.default': 'ワークスペース',
@@ -162,6 +188,19 @@ window.__ModuleLoader__.load({
         'ungrouped': '未分類',
         'empty': 'セッションはありません',
         'search.empty': '一致する項目はありません',
+        'time.now': '今',
+        'time.minutes': '{n}分',
+        'time.hours': '{n}時間',
+        'time.days': '{n}日',
+        'time.months': '{n}か月',
+        'time.years': '{n}年',
+        'time.ago': '{t}前',
+        'actions.pin': 'ピン留め',
+        'actions.unpin': 'ピン留めを解除',
+        'row.pinned': 'ピン留め済み',
+        'errors.pinFailed': 'ピン留めを更新できませんでした',
+        'errors.invalidParent': '親ワークスペースのディレクトリを使用できません。',
+        'errors.unreadable': '作成したディレクトリを読み取れませんでした。',
       },
     }
 
@@ -204,7 +243,12 @@ window.__ModuleLoader__.load({
 .dnw-rowArchived .dnw-title{color:var(--dsw-alias-label-caption)}
 .dnw-actions{flex:none;display:none;align-items:center;gap:13px}
 .dnw-row:hover .dnw-actions,.dnw-actionsOpen{display:flex}
-@media (hover:none){.dnw-actions{display:flex}}
+.dnw-resting{flex:none;display:inline-flex;align-items:center;gap:6px}
+.dnw-time{flex:none;font-size:10px;line-height:16px;color:var(--dsw-alias-label-tertiary);margin-inline-end:-1px}
+.dnw-pinIndicator{display:inline-flex;flex:none;width:16px;height:20px;align-items:center;justify-content:center;color:var(--dsw-alias-label-caption)}
+@media (hover:hover){.dnw-row:hover .dnw-resting,html[data-input-modality='keyboard'] .dnw-row:focus-within .dnw-resting{display:none}}
+.dnw-row:has(.dnw-actionsOpen) .dnw-resting{display:none}
+@media (hover:none){.dnw-actions{display:flex}.dnw-resting{display:none}}
 .dnw-dot{width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-business-primary);flex:none}
 .dnw-dotIdle{background:var(--dsw-alias-label-caption);opacity:.5}
 .dnw-empty{padding:2px 8px 4px;padding-inline-start:calc(var(--dsh-sidebar-row-padding,12px) + 22px + var(--dnw-indent,0px));font-size:13px;line-height:20px;color:var(--dsw-alias-label-caption)}
@@ -296,10 +340,61 @@ window.__ModuleLoader__.load({
         h('path', { key: 'b', d: 'M4.8 8.5v6.2h10.4V8.5' }),
         h('path', { key: 'c', d: 'M10 13.4V9.9M8.4 11.5L10 9.9l1.6 1.6' }),
       ])
+    /* A pushed-in pin, drawn solid so it reads at 14px in a 16px cell. */
+    const IconPin = () =>
+      svg(
+        [
+          h('path', { key: 'a', d: 'M7.2 3h5.6l-.7 4.1 2.4 2.1-.5 1.3H5.9l-.5-1.3 2.4-2.1z', fill: 'currentColor', stroke: 'none' }),
+          h('path', { key: 'b', d: 'M10 10.5V17' }),
+        ],
+        { strokeWidth: 1.4 },
+      )
+    const IconPinOutline = () =>
+      svg([
+        h('path', { key: 'a', d: 'M7.2 3h5.6l-.7 4.1 2.4 2.1-.5 1.3H5.9l-.5-1.3 2.4-2.1z' }),
+        h('path', { key: 'b', d: 'M10 10.5V17' }),
+      ])
 
     /* ---------------------------------------------------------------- utilities */
 
     const cls = (...parts) => parts.filter(Boolean).join(' ')
+
+    const MINUTE_MS = 60 * 1000
+    const HOUR_MS = 60 * MINUTE_MS
+    const DAY_MS = 24 * HOUR_MS
+    const MONTH_MS = 30 * DAY_MS
+    const YEAR_MS = 365 * DAY_MS
+
+    /**
+     * Coarse age bucket of one timestamp, mirroring the shipped row labels.
+     * @returns {{unit: 'now'|'minutes'|'hours'|'days'|'months'|'years', n: number}}
+     */
+    function relativeTime(updatedAt, now) {
+      /* `updatedAt` is epoch milliseconds on a live SessionSummary; a fixture or
+       * a future shape may hand us something else, and a "NaN分钟" label is
+       * worse than no label at all. */
+      const stamp = typeof updatedAt === 'number' ? updatedAt : typeof updatedAt === 'string' ? Date.parse(updatedAt) : Number(updatedAt)
+      if (!Number.isFinite(stamp) || !Number.isFinite(now)) return { unit: 'now', n: 0 }
+      const age = Math.max(0, now - stamp)
+      if (age < MINUTE_MS) return { unit: 'now', n: 0 }
+      if (age < HOUR_MS) return { unit: 'minutes', n: Math.floor(age / MINUTE_MS) }
+      if (age < DAY_MS) return { unit: 'hours', n: Math.floor(age / HOUR_MS) }
+      if (age < MONTH_MS) return { unit: 'days', n: Math.floor(age / DAY_MS) }
+      if (age < YEAR_MS) return { unit: 'months', n: Math.floor(age / MONTH_MS) }
+      return { unit: 'years', n: Math.floor(age / YEAR_MS) }
+    }
+
+    /** Compact resting label: 刚刚 / 12分钟 / 3小时 / 2天 … */
+    function timeLabel(updatedAt, now, t) {
+      const { unit, n } = relativeTime(updatedAt, now)
+      return unit === 'now' ? t('time.now') : t('time.' + unit, { n })
+    }
+
+    /** Full sentence for the tooltip: 刚才 / 12分钟前 … */
+    function hoverTimeLabel(updatedAt, now, t) {
+      const { unit, n } = relativeTime(updatedAt, now)
+      return unit === 'now' ? t('time.now') : t('time.ago', { t: t('time.' + unit, { n }) })
+    }
 
     function isRecord(value) {
       return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -434,7 +529,7 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: ['slots', 'locale', 'contextMenus', 'workspaces', 'uiWorkspace', 'sessions'],
+      inject: ['slots', 'locale', 'contextMenus', 'workspaces', 'uiWorkspace', 'sessions', 'connection'],
       apply(ctx) {
         const store = createStore()
         const addChildRequest = createSignal(null)
@@ -459,6 +554,47 @@ window.__ModuleLoader__.load({
           } catch {
             /* no toast surface: the dialog already reported the outcome inline */
           }
+        }
+
+        /* --------------------------------------------------- child directories */
+
+        /* The composed directory picker is a capability union: a Host whose
+         * backend is the OS chooser serves only `native`, and `createDirectory`
+         * belongs to `browse`, so it answers "needs the browse capability".
+         * Making a folder is not really browsing, so this bundle's Host half
+         * does the mkdir and answers over Connection; `createDirectory` stays
+         * as the fallback for compositions that do serve the browse backend. */
+        const CREATE_CHILD_ENDPOINT = 'nested-workspaces'
+
+        const createChildDirectory = async (parent, name) => {
+          const connection = ctx.get('connection')
+          const rpc = connection !== null && typeof connection === 'object' ? connection.rpc : null
+          if (rpc !== null && typeof rpc === 'object' && typeof rpc.call === 'function') {
+            let result = null
+            try {
+              const controller = typeof AbortController === 'function' ? new AbortController() : null
+              result = await rpc.call(
+                '/api',
+                CREATE_CHILD_ENDPOINT,
+                { action: 'createChild', parent, name },
+                controller === null ? undefined : controller.signal,
+              )
+            } catch {
+              /* Transport missing or route unregistered: fall through to the
+               * shipped picker endpoint below. */
+              result = null
+            }
+            if (result !== null && typeof result === 'object') {
+              if (result.ok === true) {
+                const value = result.value !== null && typeof result.value === 'object' ? result.value.path : undefined
+                if (typeof value === 'string' && value !== '') return value
+                throw new Error('createChild answered without a directory path')
+              } else if (result.error !== null && typeof result.error === 'object' && typeof result.error.code === 'string') {
+                throw Object.assign(new Error(String(result.error.message || result.error.code)), { code: result.error.code })
+              }
+            }
+          }
+          return uiWorkspace.createDirectory(parent, name)
         }
 
         /* ------------------------------------------------------- context menus */
@@ -541,6 +677,11 @@ window.__ModuleLoader__.load({
           'dsh-nested-workspaces: move-to menu',
         )
 
+        /* Pin/unpin is NOT registered here.  ui-workspace already contributes
+         * `session.pin` at order 100 (guarding archived rows and the pin/unpin
+         * capability), and a second contribution would show the toggle twice in
+         * the same menu.  The plugin's value-add is the row button below. */
+
         /* --------------------------------------------------------------- dialog */
 
         function NewWorkspaceDialog(props) {
@@ -568,6 +709,10 @@ window.__ModuleLoader__.load({
             if (code === 'directory-picker/exists' || message.includes('directory-exists') || message.includes('already exists')) {
               return t('errors.exists')
             }
+            /* The Host answers these two with a stable code and an English OS
+             * string; show the localized wording instead of the raw message. */
+            if (code === 'nested-workspaces/invalid-parent') return t('errors.invalidParent')
+            if (code === 'directory-picker/unreadable') return t('errors.unreadable')
             return t('errors.createFailed', { message })
           }
 
@@ -587,7 +732,7 @@ window.__ModuleLoader__.load({
             try {
               let path = trimmed
               if (isChild) {
-                path = await uiWorkspace.createDirectory(request.parentPath, trimmed)
+                path = await createChildDirectory(request.parentPath, trimmed)
               } else if (path === '') {
                 /* No typed path: ask the host's directory picker, which is the
                  * same flow the shipped picker uses. */
@@ -1012,8 +1157,9 @@ window.__ModuleLoader__.load({
          */
         function SessionRow(props) {
           const { session, groupKey, index, bucket, env } = props
-          const { view, statuses, t, uiWorkspace, useSessionAccess, openMenu, assignSession, dragIdRef, draggingId, dropTarget, setDropTarget, setDraggingId } = env
+          const { view, statuses, t, uiWorkspace, useSessionAccess, openMenu, assignSession, dragIdRef, draggingId, dropTarget, setDropTarget, setDraggingId, now } = env
           const isArchived = view.archived.has(session.id)
+          const isPinned = view.pinned.has(session.id) && !isArchived
           const label = session.blank ? (session.id === view.currentId ? t('session.new') : t('session.untitled')) : sessionTitle(session)
           const title = label === '' ? t('session.untitled') : label
           const status = statuses.get(session.id)
@@ -1021,9 +1167,34 @@ window.__ModuleLoader__.load({
           const selected = session.id === view.currentId
           const canUnarchive = useSessionAccess(session.id, 'workspace/unarchiveSession')
           const canMove = useSessionAccess(session.id, 'workspace/insertSessionBefore')
+          const canPin = useSessionAccess(session.id, isPinned ? 'workspace/unpinSession' : 'workspace/pinSession')
           const canDrag = !session.blank && !isArchived && canMove
           const rowDropPosition = dropTarget !== null && dropTarget.sessionId === session.id ? dropTarget.position : null
           const actions = []
+          const menuOpen = env.menuOpenSessionId === session.id
+          if (!session.blank && !isArchived && canPin) {
+            actions.push(
+              h(
+                'button',
+                {
+                  type: 'button',
+                  key: 'pin',
+                  className: cls('dnw-iconButton', isPinned && 'dnw-iconButtonOn'),
+                  title: t(isPinned ? 'actions.unpin' : 'actions.pin'),
+                  'aria-label': t(isPinned ? 'actions.unpin' : 'actions.pin') + ' ' + title,
+                  'aria-pressed': isPinned,
+                  onClick: event => {
+                    event.stopPropagation()
+                    const task = isPinned ? uiWorkspace.unpinSession(session.id) : uiWorkspace.pinSession(session.id)
+                    if (task !== null && typeof task === 'object' && typeof task.catch === 'function') {
+                      task.catch(() => notify(t('errors.pinFailed'), false))
+                    }
+                  },
+                },
+                h(isPinned ? IconPin : IconPinOutline, null),
+              ),
+            )
+          }
           if (!session.blank && !isArchived) {
             actions.push(
               openMenu(
@@ -1141,7 +1312,35 @@ window.__ModuleLoader__.load({
               running ? h('span', { className: 'dnw-dot' }) : h('span', { className: cls('dnw-dot', 'dnw-dotIdle') }),
             ),
             h('span', { className: cls('dnw-title', (session.blank || isArchived) && 'dnw-titleMuted') }, title),
-            actions.length === 0 ? null : h('span', { className: 'dnw-actions' }, ...actions),
+            /* Resting cell: the last-used time and, when pinned, the pin glyph —
+             * the shipped browser swaps this cell for the action buttons on
+             * hover, and so does this one. */
+            session.blank
+              ? null
+              : h(
+                  'span',
+                  { className: 'dnw-resting' },
+                  h(
+                    'span',
+                    { className: 'dnw-time', title: hoverTimeLabel(session.updatedAt, now, t) },
+                    timeLabel(session.updatedAt, now, t),
+                  ),
+                  isPinned
+                    ? h(
+                        'span',
+                        {
+                          className: 'dnw-pinIndicator',
+                          role: 'img',
+                          'aria-label': t('row.pinned'),
+                          title: t('row.pinned'),
+                        },
+                        h(IconPin, null),
+                      )
+                    : null,
+                ),
+            actions.length === 0
+              ? null
+              : h('span', { className: cls('dnw-actions', menuOpen && 'dnw-actionsOpen') }, ...actions),
           )
         }
 
@@ -1290,6 +1489,18 @@ window.__ModuleLoader__.load({
           const useSessionAccess = typeof props.useSessionAccess === 'function' ? props.useSessionAccess : () => true
           const state = useSyncExternalStore(store.subscribe, store.get, store.get)
           const request = useSyncExternalStore(addChildRequest.subscribe, addChildRequest.get, addChildRequest.get)
+          /* The shared context menu portals out of the row, so neither :hover nor
+           * :focus-within holds while a row's menu is open.  Track the menu's
+           * active target instead, exactly like the shipped `.sessionRow.menuOpen`. */
+          const menuTarget = useSyncExternalStore(
+            contextMenus.active.subscribe,
+            contextMenus.active.getSnapshot,
+            contextMenus.active.getSnapshot,
+          )
+          const menuOpenSessionId =
+            menuTarget !== null && menuTarget !== undefined && menuTarget.kind === 'session'
+              ? menuTarget.value.sessionId
+              : null
           const list = useSessions(snapshot => snapshot)
           const workspaceSnapshot = useWorkspaces(snapshot => snapshot)
           const statuses = useSessionStatus(snapshot => snapshot)
@@ -1345,6 +1556,7 @@ window.__ModuleLoader__.load({
             }
 
             const archived = new Set(workspaceSnapshot.archivedSessionIds)
+            const pinned = new Set(workspaceSnapshot.pinnedSessionIds)
             const realOwner = new Map()
             for (const item of items) for (const id of item.sessionIds) realOwner.set(id, item.workspaceId)
             const currentId = list.ids.find(id => ((list.byId[id] && list.byId[id].retainedBy.mainView) || 0) > 0) || null
@@ -1384,27 +1596,38 @@ window.__ModuleLoader__.load({
               const saved = state.order[key]
               if (!Array.isArray(saved) || saved.length === 0) {
                 bucket.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))
-                continue
+              } else {
+                const rank = new Map()
+                for (let index = 0; index < saved.length; index += 1) rank.set(saved[index], index)
+                const known = []
+                const rest = []
+                for (const session of bucket) {
+                  if (rank.has(session.id)) known.push(session)
+                  else rest.push(session)
+                }
+                known.sort((a, b) => rank.get(a.id) - rank.get(b.id))
+                rest.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))
+                bucket.splice(0, bucket.length, ...known, ...rest)
               }
-              const rank = new Map()
-              for (let index = 0; index < saved.length; index += 1) rank.set(saved[index], index)
-              const known = []
-              const rest = []
+              /* Shipped section order: the blank row, then pinned rows, then the
+               * rest.  Sorting after the manual order keeps both intact. */
+              const leading = []
+              const pinnedRows = []
+              const trailing = []
               for (const session of bucket) {
-                if (rank.has(session.id)) known.push(session)
-                else rest.push(session)
+                if (session.blank) leading.push(session)
+                else if (pinned.has(session.id) && !archived.has(session.id)) pinnedRows.push(session)
+                else trailing.push(session)
               }
-              known.sort((a, b) => rank.get(a.id) - rank.get(b.id))
-              rest.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))
-              members.set(key, known.concat(rest))
+              bucket.splice(0, bucket.length, ...leading, ...pinnedRows, ...trailing)
             }
 
             const filtering = needle !== ''
             let visibleCount = 0
             for (const bucket of members.values()) visibleCount += bucket.length
 
-            return { byId, parentOf, childrenOf, roots, members, currentId, ownerOf, realOwner, archived, filtering, visibleCount }
-          }, [items, list, state.order, state.assign, workspaceSnapshot.archivedSessionIds, query, showArchived])
+            return { byId, parentOf, childrenOf, roots, members, currentId, ownerOf, realOwner, archived, pinned, filtering, visibleCount }
+          }, [items, list, state.order, state.assign, workspaceSnapshot.archivedSessionIds, workspaceSnapshot.pinnedSessionIds, query, showArchived])
 
           const setExpanded = useCallback((workspaceId, expanded) => {
             store.update(current => ({
@@ -1416,6 +1639,16 @@ window.__ModuleLoader__.load({
           const assignSession = useCallback(
             (sessionId, groupKey, beforeSessionId) => {
               if (typeof sessionId !== 'string' || sessionId === '') return
+              /* The display bucket is re-partitioned blank → pinned → rest after a
+               * drop index is derived, so a drop that crosses the pinned boundary
+               * would land somewhere other than the marker promised. Refuse it. */
+              if (
+                beforeSessionId !== undefined &&
+                beforeSessionId !== null &&
+                view.pinned.has(sessionId) !== view.pinned.has(beforeSessionId)
+              ) {
+                return
+              }
               store.update(current => {
                 const realOwner = view.realOwner.get(sessionId)
                 const previousKey = view.ownerOf(sessionId)
@@ -1550,7 +1783,8 @@ window.__ModuleLoader__.load({
             view, state, statuses, t, uiWorkspace,
             useSessionAccess, useWorkspaceAccess,
             openMenu, openWorkspaceMenu, assignSession, setExpanded, setRenaming,
-            menu, draggingId, dropTarget, dragIdRef, setDraggingId, setDropTarget,
+            menu, menuOpenSessionId, draggingId, dropTarget, dragIdRef, setDraggingId, setDropTarget,
+            now: Date.now(),
           }
 
           const tree = []

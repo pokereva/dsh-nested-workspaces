@@ -25,6 +25,13 @@ name.
 - **Every row keeps its affordances.** Each workspace row, child or not, has the
   same `…` menu (add child, new session, rename, delete) and the same
   new-session button.
+- **Last-used time.** Every session row shows how long ago it was last used
+  (`刚刚 / 12分钟 / 3小时 / 2天`, `now / 12min / 3h / 2d`), hover-swapped for the
+  row buttons exactly like the shipped browser. The full sentence (`12分钟前`)
+  is the tooltip.
+- **Pin.** The row's pin button pins the session; pinned rows show a filled pin
+  glyph beside the time and sort to the top of their workspace. The session `…`
+  menu offers the same toggle as **置顶 / 取消置顶**.
 - **Workspace rename and delete.** Double-click a workspace title to rename it in
   place; the `…` menu offers the same plus a delete confirmation. Deleting a
   workspace only removes it from the sidebar — the folder and its sessions stay on
@@ -52,15 +59,22 @@ row list). A few things come with that trade:
 - Workspace rows carry this plugin's own menu instead of the shipped one: rename,
   delete, new session and add child workspace all live there. Entries that other
   plugins contribute to the *shipped* workspace context menu are not shown here.
-- The shipped per-row **pin** and **archive** hover buttons are gone. Session
-  pinning and per-session archiving stay available from the session's own `…`
-  menu, which is still the shipped menu.
-- The child seats the shipped browser used to expose
+- Session rows carry this plugin's own pin button and resting cell (time + pin
+  glyph) instead of the shipped ones, and per-session archiving stays in the
+  session's own `…` menu, which is still the shipped menu.
+- The shipped browser's child seats
   (`sidebar.workspaces.directoryFlow`, `sidebar.workspaces.session.row.action`,
   `sidebar.session.row.leading`, `sidebar.session.row.trailing`,
   `sidebar.session.row.hover`) are not rendered on these rows, so additions other
   plugins place in them will not appear inside this section. The session `…` menu
   is unaffected and remains the supported extension point.
+- **Add child workspace does not need the browse picker.** A Host whose composed
+  directory picker is the OS chooser (the `native` capability) cannot serve
+  `directoryPicker.createDirectory`. This bundle's Host half therefore creates the
+  folder itself over the Connection route `/api/nested-workspaces`. The plugin
+  falls back to the shipped `createDirectory` endpoint if that route cannot be
+  called (for example an older Host half), which on a `native`-only Host is the
+  error you would otherwise see.
 
 ## Using it
 
@@ -73,6 +87,8 @@ Right-click any workspace in the sidebar.
 | New session in a child | the `+` on the child's row |
 | File a session under another workspace | drag the session row, or session `…` menu → 移动到工作区 |
 | Rename / delete a workspace | double-click its title, or its `…` menu |
+| Pin / unpin a session | the pin button on its row, or session `…` menu → 置顶 |
+| See the last-used time | the resting label on its row; hover for the sentence |
 | Show archived sessions | the archive button in the section header |
 
 ## Languages

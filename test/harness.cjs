@@ -24,6 +24,9 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const os = require('os');
+const fsp = require('fs/promises');
+const { pathToFileURL } = require('url');
 
 const ROOT = path.resolve(__dirname, '..');
 const CLIENT_SOURCE = fs.readFileSync(path.join(ROOT, 'client.js'), 'utf8');
@@ -217,7 +220,7 @@ const requireStub = (specifier) => {
 const plugin = loaded.factory(requireStub);
 check('plugin exports apply()', typeof plugin.apply === 'function');
 check('plugin declares its inject list', Array.isArray(plugin.inject));
-for (const service of ['slots', 'locale', 'contextMenus', 'workspaces', 'uiWorkspace', 'sessions']) {
+for (const service of ['slots', 'locale', 'contextMenus', 'workspaces', 'uiWorkspace', 'sessions', 'connection']) {
   check('inject includes ' + service, plugin.inject.indexOf(service) >= 0, JSON.stringify(plugin.inject));
 }
 
@@ -554,6 +557,7 @@ function renderOnce(renderProps) {
   hookLogByComponent.clear();
   componentSequences.length = 0;
   identityLog.length = 0;
+  const startIndex = collected.length;
   let rendered = null;
   let error = null;
   const previous = renderingComponent;
@@ -568,8 +572,15 @@ function renderOnce(renderProps) {
     activeSequence = null;
   }
   if (rendered !== null) walk(rendered);
+  const passNodes = collected.slice(startIndex);
+  const passText = passNodes
+    .filter((entry) => entry.kind === 'text')
+    .map((entry) => entry.value)
+    .join(' ');
   return {
     error,
+    text: passText,
+    nodes: passNodes,
     sidebarHooks: (hookLogByComponent.get('Sidebar') || []).slice(),
     sequences: componentSequences.map((entry) => ({ name: entry.name, hooks: entry.hooks })),
     identities: Array.from(new Set(identityLog)),
@@ -658,12 +669,212 @@ check(
   'small=' + smallPass.identities.length + ' shared=' + sharedIdentities.length,
 );
 
-/* ------------------------------------------------------------ summary print */
+/* ------------------------------------------------- last-used time and pinning */
 
-if (failures.length > 0) {
-  console.error('FAILED ' + failures.length + ' of ' + (passed + failures.length) + ' checks:');
-  for (const failure of failures) console.error('  x ' + failure);
-  process.exitCode = 1;
-} else {
+/* The shipped browser prints a relative age at rest and a pin glyph on pinned
+ * rows; both come from data the sidebar already subscribes to. */
+const pinnedPass = renderOnce(
+  Object.assign({}, props, {
+    useWorkspaces: selectorHook(Object.assign({}, workspaceSnapshot, { pinnedSessionIds: ['s2'] })),
+  }),
+);
+check('pinned render succeeds', pinnedPass.error === null, pinnedPass.error && (pinnedPass.error.stack || String(pinnedPass.error)));
+
+const pinnedNodes = pinnedPass.nodes.filter((entry) => entry.kind === 'element');
+const timeNodes = pinnedNodes.filter((entry) => typeof entry.props.className === 'string' && /(^|\s)dnw-time(\s|$)/.test(entry.props.className));
+check('session rows render a last-used time', timeNodes.length > 0, 'time nodes=' + timeNodes.length);
+check(
+  'the time cell carries a full tooltip sentence',
+  timeNodes.some((entry) => typeof entry.props.title === 'string' && entry.props.title.length > 0),
+  timeNodes.map((entry) => entry.props.title).join('|'),
+);
+
+/* Pin/unpin is offered by ui-workspace's own `session.pin` contribution; this
+ * plugin must NOT duplicate it in the same menu. The plugin's value-add is the
+ * row button, covered below. */
+check(
+  'does not duplicate the shipped session pin menu',
+  menuContributions.every((entry) => entry.id !== 'session.nestedPin'),
+  JSON.stringify(menuContributions.map((entry) => entry.id)),
+);
+
+/* Pinned rows must come first inside their group, and the pin glyph must be
+ * present for them only. */
+function renderWithSnapshot(snapshot, sessions) {
+  return renderOnce(
+    Object.assign({}, props, {
+      useWorkspaces: selectorHook(snapshot),
+      useSessions: selectorHook(sessions),
+    }),
+  );
+}
+
+const markerSessions = {
+  ids: ['a', 'b'],
+  byId: {
+    a: { id: 'a', title: 'older', displayTitle: 'older', cwd: 'C:/repo/a', running: false, retainedBy: {}, blank: false, updatedAt: Date.now() - 2 * 60 * 60 * 1000 },
+    b: { id: 'b', title: 'newer', displayTitle: 'newer', cwd: 'C:/repo/a', running: false, retainedBy: {}, blank: false, updatedAt: Date.now() - 5 * 60 * 1000 },
+  },
+  phase: 'ready',
+  projectionsBySession: {},
+};
+const singleWorkspace = {
+  items: [workspacesFixture[0]],
+  archivedSessionIds: [],
+  pinnedSessionIds: ['a'],
+  state: 'idle',
+  phase: 'ready',
+  error: null,
+};
+const orderPass = renderWithSnapshot(singleWorkspace, markerSessions);
+check('pinned ordering render succeeds', orderPass.error === null, orderPass.error && (orderPass.error.stack || String(orderPass.error)));
+const orderText = orderPass.text;
+const pinNodes = orderPass.nodes.filter((entry) => entry.kind === 'element' && typeof entry.props.className === 'string' && /dnw-pinIndicator/.test(entry.props.className));
+check('pinned rows render the pin glyph', pinNodes.length === 1, 'pin nodes=' + pinNodes.length);
+check('the pin glyph is labelled', pinNodes.some((entry) => typeof entry.props['aria-label'] === 'string' && entry.props['aria-label'].length > 0));
+const restNodes = orderPass.nodes.filter((entry) => entry.kind === 'element' && typeof entry.props.className === 'string' && /dnw-resting/.test(entry.props.className));
+check('every non-blank session renders a resting cell', restNodes.length === 2, 'resting=' + restNodes.length);
+check(
+  'pinned rows sort ahead of newer unpinned rows',
+  orderText !== undefined
+    ? orderText.indexOf('older') >= 0 && orderText.indexOf('older') < orderText.indexOf('newer')
+    : true,
+  'captured=' + (orderPass.text === undefined ? 'no text captured' : orderText.slice(0, 200)),
+);
+
+/* The resting cell must render the relative last-used label, not an empty span. */
+function elementText(entry) {
+  const children = entry.props.children
+  if (Array.isArray(children)) return children.filter((child) => typeof child === 'string').join('')
+  if (typeof children === 'string') return children
+  return ''
+}
+const timeTexts = orderPass.nodes
+  .filter((entry) => entry.kind === 'element' && entry.props.className === 'dnw-time')
+  .map(elementText);
+check('resting cells render a relative time label', timeTexts.every((text) => text.trim() !== ''), JSON.stringify(timeTexts));
+check('relative time buckets differ for 2h and 5min', new Set(timeTexts).size === 2, JSON.stringify(timeTexts));
+
+/* While a row's shared menu is open its action cluster stays visible — the menu
+ * portals away from the row, so :hover / :focus-within cannot hold. */
+let activeTarget = null;
+contextMenusService.active = {
+  getSnapshot: () => activeTarget,
+  subscribe: () => () => {},
+};
+activeTarget = { kind: 'session', value: { sessionId: 'a', displayTitle: 'older' } };
+const openPass = renderWithSnapshot(singleWorkspace, markerSessions);
+check('row with an open menu renders', openPass.error === null, openPass.error && (openPass.error.stack || String(openPass.error)));
+const openClusters = openPass.nodes.filter(
+  (entry) => entry.kind === 'element' && typeof entry.props.className === 'string' && /\bdnw-actionsOpen\b/.test(entry.props.className),
+);
+check('the open row keeps its action cluster visible', openClusters.length === 1, 'open clusters=' + openClusters.length);
+activeTarget = null;
+const closedPass = renderWithSnapshot(singleWorkspace, markerSessions);
+const stillOpen = closedPass.nodes.filter(
+  (entry) => entry.kind === 'element' && typeof entry.props.className === 'string' && /\bdnw-actionsOpen\b/.test(entry.props.className),
+);
+check('the cluster closes with the menu', stillOpen.length === 0, 'open clusters=' + stillOpen.length);
+
+/* ------------------------------------------------------------------ host half */
+
+/* index.js is an ES module and this harness is CommonJS, and the route
+ * assertions await the handler, so the host section runs inside an async main
+ * and the summary print follows it. */
+async function hostChecks() {
+  const hostModule = await import(pathToFileURL(path.join(ROOT, 'index.js')).href);
+  check('host half declares the connection inject', Array.isArray(hostModule.inject) && hostModule.inject.indexOf('connection') >= 0, JSON.stringify(hostModule.inject));
+  check('host half exports apply()', typeof hostModule.apply === 'function');
+
+  const routes = [];
+  const hostEffects = [];
+  const hostCtx = {
+    connection: {
+      fetch: {
+        register: (route) => {
+          routes.push(route);
+          return async () => {};
+        },
+      },
+    },
+    effect: (factory, label) => {
+      hostEffects.push({ label, dispose: factory() });
+    },
+  };
+  hostModule.apply(hostCtx);
+  check('host half registers one route', routes.length === 1, 'routes=' + routes.length);
+  const hostRoute = routes[0];
+  check('route is an exact /api path', hostRoute !== undefined && /^\/api\/[A-Za-z0-9._~-]+$/.test(hostRoute.path), hostRoute && hostRoute.path);
+  check('route answers POST before creating', Array.isArray(hostRoute.methods) && hostRoute.methods.join(',') === 'POST');
+  check('host half cleans the route up on dispose', hostEffects.length === 1 && typeof hostEffects[0].dispose === 'function');
+
+  const callRoute = async (payload) => {
+    const request = {
+      method: 'POST',
+      json: async () => ({ type: 'client-request', rpcId: 'r1', method: 'nested-workspaces', payload }),
+    };
+    const response = await hostRoute.fetch(request);
+    return response.json();
+  };
+
+  /* The name validator runs before any filesystem work, so these cases are pure. */
+  const invalidNames = ['', '  ', '.', '..', 'a/b', 'a\\b'];
+  let invalidRejected = 0;
+  for (const name of invalidNames) {
+    const body = await callRoute({ action: 'createChild', parent: 'C:/repo/a', name });
+    if (body && body.result && body.result.ok === false) invalidRejected += 1;
+  }
+  check('host rejects every unusable child name', invalidRejected === invalidNames.length, invalidRejected + '/' + invalidNames.length);
+
+  const badAction = await callRoute({ action: 'nope', parent: 'C:/repo/a', name: 'x' });
+  check('host rejects an unknown action', !!(badAction && badAction.result && badAction.result.ok === false), JSON.stringify(badAction));
+  check('host wraps results in the connection envelope', !!(badAction && badAction.type === 'server-response' && badAction.rpcId === 'r1'));
+
+  const missingParent = await callRoute({ action: 'createChild', name: 'x' });
+  check('host requires a parent directory', !!(missingParent && missingParent.result && missingParent.result.ok === false));
+
+  /* The real filesystem path: create once, then collide, and prove the case the
+   * dialog maps to 「已存在」 carries the stable `directory-picker/exists` code. */
+  const scratch = await fsp.mkdtemp(path.join(os.tmpdir(), 'dnw-'));
+  try {
+    const created = await callRoute({ action: 'createChild', parent: scratch, name: 'kid' });
+    const createdPath = created && created.result && created.result.ok === true ? created.result.value.path : null;
+    check('host creates the child directory', createdPath === path.join(scratch, 'kid'), JSON.stringify(created));
+    let onDisk = false;
+    try {
+      onDisk = (await fsp.stat(createdPath)).isDirectory();
+    } catch {
+      onDisk = false;
+    }
+    check('the created child exists on disk', onDisk === true);
+
+    const collision = await callRoute({ action: 'createChild', parent: scratch, name: 'kid' });
+    check(
+      'a second child of the same name reports directory-picker/exists',
+      !!(collision && collision.result && collision.result.ok === false && collision.result.error.code === 'directory-picker/exists'),
+      JSON.stringify(collision),
+    );
+  } finally {
+    await fsp.rm(scratch, { recursive: true, force: true });
+  }
+}
+
+hostChecks().then(
+  () => finish(),
+  (error) => {
+    failures.push('host half checks threw — ' + (error && error.stack ? error.stack : String(error)));
+    finish();
+  },
+);
+
+/* Summary print. It has to wait for hostChecks(), because the route
+ * assertions are async. */
+function finish() {
+  if (failures.length > 0) {
+    console.error('FAILED ' + failures.length + ' of ' + (passed + failures.length) + ' checks:');
+    for (const failure of failures) console.error('  x ' + failure);
+    process.exitCode = 1;
+    return;
+  }
   console.log('ok — ' + passed + ' checks passed');
 }

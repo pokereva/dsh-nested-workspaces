@@ -65,6 +65,23 @@ const componentSequences = [];
  * drops focus. The identity must be stable across passes. */
 const identityLog = [];
 
+/* Per-instance hook cells. React keeps hook state between renders; the fake
+ * used to throw it away, which made an event handler's setState unobservable.
+ * Cells are keyed by instance + call order, exactly the order React requires. */
+const stateCells = new Map();
+const refCells = new Map();
+let hookCursor = 0;
+let instanceKey = '<root>';
+
+function hookKey(kind) {
+  return instanceKey + '#' + hookCursor++;
+}
+
+function resetHookState() {
+  stateCells.clear();
+  refCells.clear();
+}
+
 function recordHook(name) {
   hookCalls.push(name);
   const key = renderingComponent === null ? '<root>' : renderingComponent.name || '<anon>';
@@ -84,8 +101,13 @@ function makeReact() {
 
   const useState = (initial) => {
     recordHook('useState');
-    const value = typeof initial === 'function' ? initial() : initial;
-    return [value, () => {}];
+    const key = hookKey('state');
+    if (!stateCells.has(key)) stateCells.set(key, typeof initial === 'function' ? initial() : initial);
+    const set = (next) => {
+      const current = stateCells.get(key);
+      stateCells.set(key, typeof next === 'function' ? next(current) : next);
+    };
+    return [stateCells.get(key), set];
   };
   const useMemo = (factory) => {
     recordHook('useMemo');
@@ -97,7 +119,9 @@ function makeReact() {
   };
   const useRef = (initial) => {
     recordHook('useRef');
-    return { current: initial };
+    const key = hookKey('ref');
+    if (!refCells.has(key)) refCells.set(key, { current: initial });
+    return refCells.get(key);
   };
   const useEffect = () => {
     recordHook('useEffect');
@@ -189,6 +213,9 @@ const sandbox = {
     removeEventListener: () => {},
     localStorage: null,
     innerWidth: 1200,
+    setTimeout,
+    clearTimeout,
+    requestAnimationFrame: (fn) => setTimeout(fn, 0),
     document: fakeDocument,
   },
   document: fakeDocument,
@@ -245,9 +272,15 @@ function translateFactory(namespace) {
   };
 }
 
+/* Mutated by the reorder/dialog checks below; the service reads it lazily. */
+const registryItems = [];
+
 const workspacesCall = [];
 const workspacesService = {
-  list: { getSnapshot: () => ({ items: [], archivedSessionIds: [], pinnedSessionIds: [], phase: 'ready' }), subscribe: () => () => {} },
+  list: {
+    getSnapshot: () => ({ items: registryItems, archivedSessionIds: [], pinnedSessionIds: [], phase: 'ready' }),
+    subscribe: () => () => {},
+  },
   create: async (input) => {
     workspacesCall.push(['create', input]);
     return { workspaceId: 'ws-new', path: input.path, title: 'new' };
@@ -258,7 +291,9 @@ const workspacesService = {
   delete: async (id) => {
     workspacesCall.push(['delete', id]);
   },
-  insertBefore: async () => {},
+  insertBefore: async (id, anchor) => {
+    workspacesCall.push(['insertBefore', id, anchor]);
+  },
   insertSessionBefore: async () => {},
   archiveSession: async () => {},
   unarchiveSession: async () => {},
@@ -453,8 +488,11 @@ const props = {
 };
 
 hookCalls.length = 0;
+resetHookState();
 let tree = null;
 let renderError = null;
+instanceKey = 'Sidebar@root';
+hookCursor = 0;
 try {
   tree = sidebarRegistration.component(props);
 } catch (error) {
@@ -488,15 +526,21 @@ function walk(node) {
     if (typeof node.type === 'function') {
       const previous = renderingComponent;
       const previousSequence = activeSequence;
+      const previousKey = instanceKey;
+      const previousCursor = hookCursor;
       const sequence = [];
       renderingComponent = node.type;
       activeSequence = sequence;
+      instanceKey = (node.type.name || '<anon>') + '@' + String(node.key);
+      hookCursor = 0;
       if (node.type.name === `SessionRow` || node.type.name === `WorkspaceGroup`) identityLog.push(node.type);
       try {
         walk(node.type(node.props));
       } finally {
         renderingComponent = previous;
         activeSequence = previousSequence;
+        instanceKey = previousKey;
+        hookCursor = previousCursor;
         componentSequences.push({
           name: node.type.name || '<anon>',
           key: node.key,
@@ -552,7 +596,9 @@ check('binds the sidebar scroll area', scrollerNodes.length === 1);
  * same component with a bigger fixture and require the parent hook sequence to
  * be identical. */
 
-function renderOnce(renderProps) {
+function renderOnce(renderProps, options) {
+  const keepState = options !== undefined && options.keepState === true;
+  if (!keepState) resetHookState();
   hookCalls.length = 0;
   hookLogByComponent.clear();
   componentSequences.length = 0;
@@ -563,6 +609,8 @@ function renderOnce(renderProps) {
   const previous = renderingComponent;
   renderingComponent = sidebarRegistration.component;
   activeSequence = [];
+  instanceKey = 'Sidebar@root';
+  hookCursor = 0;
   try {
     rendered = sidebarRegistration.component(renderProps);
   } catch (caught) {
@@ -742,6 +790,34 @@ check(
   'captured=' + (orderPass.text === undefined ? 'no text captured' : orderText.slice(0, 200)),
 );
 
+/* A child workspace is a real Workspace under the parent's directory: it must
+ * render nested (deeper indent) and, like the shipped browser, ahead of the
+ * parent's own session rows so a freshly added child is not buried below them. */
+const indentedRows = bigPass.nodes.filter(
+  (entry) => entry.kind === 'element' && entry.props.style !== undefined && typeof entry.props.style['--dnw-indent'] === 'string',
+);
+const depths = indentedRows.map((entry) => entry.props.style['--dnw-indent']);
+check('workspace rows carry an indent per depth', depths.length >= 3, JSON.stringify(depths));
+check('a child workspace is indented deeper than its root', depths.indexOf('12px') >= 0 && depths.indexOf('0px') >= 0, JSON.stringify(depths));
+
+const rowOrder = [];
+for (const entry of bigPass.nodes) {
+  if (entry.kind === 'element' && typeof entry.props['aria-label'] === 'string' && / — /.test(entry.props['aria-label'])) {
+    rowOrder.push(entry.props['aria-label'].split(' — ')[0]);
+  }
+  if (entry.kind === 'element' && entry.props.className === 'dnw-title' && typeof entry.props.children === 'string') {
+    rowOrder.push('session:' + entry.props.children);
+  }
+}
+const parentWorkspaceAt = rowOrder.indexOf('parent');
+const childWorkspaceAt = rowOrder.indexOf('child');
+const parentSessionAt = rowOrder.indexOf('session:first');
+check(
+  'child workspaces render above the parent own session rows',
+  parentWorkspaceAt >= 0 && childWorkspaceAt > parentWorkspaceAt && parentSessionAt > childWorkspaceAt,
+  JSON.stringify(rowOrder),
+);
+
 /* The resting cell must render the relative last-used label, not an empty span. */
 function elementText(entry) {
   const children = entry.props.children
@@ -775,6 +851,130 @@ const stillOpen = closedPass.nodes.filter(
   (entry) => entry.kind === 'element' && typeof entry.props.className === 'string' && /\bdnw-actionsOpen\b/.test(entry.props.className),
 );
 check('the cluster closes with the menu', stillOpen.length === 0, 'open clusters=' + stillOpen.length);
+
+
+
+/* ------------------------------------------------- workspace drag & creation */
+async function dragChecks() {
+
+let addChildRequestSet = () => {};
+{
+  const contribution = menuContributions.find((entry) => entry.id === 'workspace.addChild');
+  const actions = contribution.resolve({ workspaceId: 'ws-p', path: 'C:/repo/p', displayTitle: 'root' }, undefined);
+  addChildRequestSet = () => {
+    actions[0].run();
+  };
+}
+
+/* Reordering is a drag on the workspace row itself; a child must be movable
+ * among its own siblings and must never be moved out of its parent by one. */
+const scopeFixture = [
+  { workspaceId: 'ws-p', path: 'C:/repo/p', title: 'root', sessionIds: [], createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-02T00:00:00.000Z' },
+  { workspaceId: 'ws-c1', path: 'C:/repo/p/one', title: 'one', sessionIds: [], createdAt: '2026-01-03T00:00:00.000Z', updatedAt: '2026-01-04T00:00:00.000Z' },
+  { workspaceId: 'ws-c2', path: 'C:/repo/p/two', title: 'two', sessionIds: [], createdAt: '2026-01-05T00:00:00.000Z', updatedAt: '2026-01-06T00:00:00.000Z' },
+];
+const scopeSnapshot = {
+  items: scopeFixture,
+  archivedSessionIds: [],
+  pinnedSessionIds: [],
+  state: 'idle',
+  phase: 'ready',
+  error: null,
+};
+const emptySessions = { ids: [], byId: {}, phase: 'ready', projectionsBySession: {} };
+
+function rowsOf(pass) {
+  return pass.nodes.filter(
+    (entry) => entry.kind === 'element' && typeof entry.props.className === 'string' && /(^|\s)dnw-workspaceRow(\s|$)/.test(entry.props.className),
+  );
+}
+
+function rowFor(pass, workspaceId) {
+  const rows = rowsOf(pass);
+  for (const row of rows) {
+    const label = String(row.props['aria-label'] || '');
+    if (label.indexOf(workspaceId === 'ws-c1' ? 'one —' : workspaceId === 'ws-c2' ? 'two —' : 'root —') === 0) return row;
+  }
+  return null;
+}
+
+const fakeRect = () => ({ top: 0, height: 32, left: 0, right: 200, bottom: 32 });
+const dragEvent = (currentTarget, clientY) => ({
+  currentTarget,
+  target: currentTarget,
+  clientY,
+  preventDefault: () => {},
+  stopPropagation: () => {},
+  dataTransfer: { effectAllowed: '', dropEffect: '', setData: () => {}, getData: () => '' },
+});
+
+workspacesCall.length = 0;
+let dragPass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+check('workspace rows are draggable', rowsOf(dragPass).every((row) => row.props.draggable === true), 'rows=' + rowsOf(dragPass).length);
+
+const childRow = rowFor(dragPass, 'ws-c2');
+const siblingRow = rowFor(dragPass, 'ws-c1');
+check('both child rows render', childRow !== null && siblingRow !== null);
+childRow.props.onDragStart(dragEvent({ closest: () => null }, 0));
+dragPass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+const hoveredSibling = rowFor(dragPass, 'ws-c1');
+hoveredSibling.props.onDragOver(Object.assign(dragEvent({ closest: () => null }, 4), { currentTarget: { getBoundingClientRect: fakeRect } }));
+dragPass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+const markedRow = rowFor(dragPass, 'ws-c1');
+check(
+  'hovering a sibling paints the insertion marker',
+  typeof markedRow.props.className === 'string' && /dnw-dropBefore/.test(markedRow.props.className),
+  String(markedRow.props.className),
+);
+const draggingRow = rowFor(dragPass, 'ws-c2');
+check(
+  'the dragged row is dimmed',
+  typeof draggingRow.props.className === 'string' && /dnw-rowDragging/.test(draggingRow.props.className),
+  String(draggingRow.props.className),
+);
+rowFor(dragPass, 'ws-c2').props.onDragEnd();
+check(
+  'dropping a child before its sibling reorders inside the parent',
+  JSON.stringify(workspacesCall) === JSON.stringify([['insertBefore', 'ws-c2', 'ws-c1']]),
+  JSON.stringify(workspacesCall),
+);
+
+/* A drag that crosses the parent boundary must be refused: the child stays
+ * where it is instead of being hoisted to the root. */
+workspacesCall.length = 0;
+dragPass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+rowFor(dragPass, 'ws-c1').props.onDragStart(dragEvent({ closest: () => null }, 0));
+dragPass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+rowFor(dragPass, 'ws-p').props.onDragOver(Object.assign(dragEvent({ closest: () => null }, 4), { currentTarget: { getBoundingClientRect: fakeRect } }));
+dragPass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+rowFor(dragPass, 'ws-c1').props.onDragEnd();
+check('a workspace drag cannot leave its parent', workspacesCall.length === 0, JSON.stringify(workspacesCall));
+
+/* Requirement: a newly created child lands ABOVE its existing siblings. */
+registryItems.length = 0;
+registryItems.push(scopeFixture[0], scopeFixture[1], scopeFixture[2]);
+workspacesCall.length = 0;
+addChildRequestSet({ parentId: 'ws-p', parentPath: 'C:/repo/p', parentTitle: 'root' });
+let dialogPass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+const input = dialogPass.nodes.filter((entry) => entry.kind === 'element' && entry.props.className === 'dnw-dialogInput')[0];
+check('the add-child dialog renders an input', input !== undefined);
+input.props.onChange({ target: { value: 'newkid' } });
+dialogPass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+const confirm = dialogPass.nodes.filter(
+  (entry) => entry.kind === 'element' && typeof entry.props.className === 'string' && /dnw-buttonPrimary/.test(entry.props.className),
+)[0];
+check('the dialog renders a confirm button', confirm !== undefined);
+confirm.props.onClick();
+for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
+await new Promise((resolve) => setTimeout(resolve, 0));
+check(
+  'creating a child registers it and anchors it above its siblings',
+  JSON.stringify(workspacesCall) === JSON.stringify([['create', { path: 'C:/repo/p/newkid' }], ['insertBefore', 'ws-new', 'ws-c1']]),
+  JSON.stringify(workspacesCall),
+);
+addChildRequestSet(null);
+
+}
 
 /* ------------------------------------------------------------------ host half */
 
@@ -859,7 +1059,9 @@ async function hostChecks() {
   }
 }
 
-hostChecks().then(
+dragChecks()
+  .then(() => hostChecks())
+  .then(
   () => finish(),
   (error) => {
     failures.push('host half checks threw — ' + (error && error.stack ? error.stack : String(error)));

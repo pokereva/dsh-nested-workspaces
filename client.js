@@ -81,6 +81,7 @@ window.__ModuleLoader__.load({
         'actions.unpin': '取消置顶',
         'row.pinned': '已置顶',
         'errors.pinFailed': '置顶状态更新失败',
+        'errors.reorderFailed': '工作区排序更新失败',
         'errors.invalidParent': 'The parent workspace directory is not usable.',
         'errors.unreadable': 'The new directory could not be read.',
       },
@@ -140,6 +141,7 @@ window.__ModuleLoader__.load({
         'actions.unpin': 'Unpin',
         'row.pinned': 'Pinned',
         'errors.pinFailed': 'Could not update the pin',
+        'errors.reorderFailed': 'Could not reorder the workspace',
         'errors.invalidParent': 'The parent workspace directory is not usable.',
         'errors.unreadable': 'The new directory could not be read.',
       },
@@ -199,6 +201,7 @@ window.__ModuleLoader__.load({
         'actions.unpin': 'ピン留めを解除',
         'row.pinned': 'ピン留め済み',
         'errors.pinFailed': 'ピン留めを更新できませんでした',
+        'errors.reorderFailed': 'ワークスペースの並び順を更新できませんでした',
         'errors.invalidParent': '親ワークスペースのディレクトリを使用できません。',
         'errors.unreadable': '作成したディレクトリを読み取れませんでした。',
       },
@@ -743,12 +746,24 @@ window.__ModuleLoader__.load({
                 setValue(picked)
                 setBusy(true)
               }
-              await workspaces.create({ path })
+              const created = await workspaces.create({ path })
               if (isChild) {
                 store.update(state => ({
                   ...state,
                   collapsed: { ...state.collapsed, [request.parentId]: false },
                 }))
+                /* Land the new child at the TOP of its siblings instead of below
+                 * them. The Host appends new registrations after the existing
+                 * ones, so anchor the new workspace to the first sibling that is
+                 * already registered under the same parent. */
+                const createdId = created && created.workspaceId ? created.workspaceId : null
+                if (createdId !== null) {
+                  const snapshot = workspaces.list.getSnapshot()
+                  const siblings = snapshot.items
+                    .filter(item => item.workspaceId !== createdId)
+                    .filter(item => owningParentPath(item.path, snapshot.items.map(entry => entry.path)) === request.parentPath)
+                  if (siblings.length > 0) await workspaces.insertBefore(createdId, siblings[0].workspaceId).catch(() => {})
+                }
                 notify(t('createdChild'), true)
               } else {
                 notify(t('created'), true)
@@ -1346,7 +1361,7 @@ window.__ModuleLoader__.load({
 
         function WorkspaceGroup(props) {
           const { workspace, depth, env } = props
-          const { view, state, t, uiWorkspace, useWorkspaceAccess, openMenu, openWorkspaceMenu, assignSession, setExpanded, setRenaming, menu, dragIdRef, draggingId, dropTarget, setDropTarget, setDraggingId } = env
+          const { view, state, t, uiWorkspace, useWorkspaceAccess, openMenu, openWorkspaceMenu, assignSession, setExpanded, setRenaming, menu, dragIdRef, draggingId, dropTarget, setDropTarget, setDraggingId, workspaceDrag, draggingWorkspaceId, beginWorkspaceDrag, endWorkspaceDrag, hoverWorkspaceDrag, workspaceClickBlockRef } = env
           const workspaceId = workspace.workspaceId
           const collapsed = state.collapsed[workspaceId] === true
           const members = view.members.get(workspaceId) || []
@@ -1360,17 +1375,44 @@ window.__ModuleLoader__.load({
           const indent = { '--dnw-indent': depth * INDENT_PX + 'px' }
           const canCreateSession = useWorkspaceAccess(workspaceId, 'session/create')
           const collapsible = children.length > 0 || hasSessions
+          /* A workspace drag is legal only between rows that share a parent, so a
+           * child can be reordered among its siblings but never leave its root. */
+          const parentId = view.parentOf.get(workspaceId)
+          const workspaceSibling =
+            workspaceDrag !== null &&
+            workspaceDrag.workspaceId !== workspaceId &&
+            view.parentOf.get(workspaceDrag.workspaceId) === parentId
+          const workspaceDropHalf =
+            workspaceSibling && workspaceDrag.over !== null && workspaceDrag.over.id === workspaceId
+              ? workspaceDrag.over.half
+              : null
           const row = h(
             'div',
             {
               key: 'w:' + workspaceId,
-              className: cls('dnw-row', 'dnw-workspaceRow', isDropTarget && 'dnw-dropOn'),
+              className: cls(
+                'dnw-row',
+                'dnw-workspaceRow',
+                isDropTarget && 'dnw-dropOn',
+                workspaceDropHalf === 'before' && 'dnw-dropBefore',
+                workspaceDropHalf === 'after' && 'dnw-dropAfter',
+                draggingWorkspaceId === workspaceId && 'dnw-rowDragging',
+              ),
               role: 'treeitem',
               tabIndex: 0,
+              draggable: true,
               'aria-expanded': !collapsed,
               'aria-label': workspace.title + ' — ' + workspace.path,
               style: indent,
-              onClick: () => setExpanded(workspaceId, collapsed),
+              onClick: () => {
+                /* A drag ends with a click; expanding on it would undo the drop. */
+                if (draggingWorkspaceId !== null) return
+                if (workspaceClickBlockRef.current) {
+                  workspaceClickBlockRef.current = false
+                  return
+                }
+                setExpanded(workspaceId, collapsed)
+              },
               onKeyDown: event => {
                 if (event.target !== event.currentTarget) return
                 if (event.key !== 'Enter' && event.key !== ' ') return
@@ -1378,7 +1420,50 @@ window.__ModuleLoader__.load({
                 setExpanded(workspaceId, collapsed)
               },
               onContextMenu: event => openWorkspaceMenu(event, workspace),
+              onDragStart: event => {
+                /* `draggable` lives on the row, so the target is normally the row
+                 * itself; a drag started on the action buttons must not reorder. */
+                const fromActions =
+                  event.target !== event.currentTarget &&
+                  typeof Element !== 'undefined' &&
+                  event.target instanceof Element &&
+                  event.target.closest('.dnw-actions') !== null
+                if (fromActions) {
+                  event.preventDefault()
+                  return
+                }
+                event.stopPropagation()
+                try {
+                  event.dataTransfer.effectAllowed = 'move'
+                  event.dataTransfer.setData('text/plain', workspaceId)
+                } catch {
+                  /* ignore */
+                }
+                beginWorkspaceDrag(workspaceId)
+              },
+              onDragEnd: () => {
+                endWorkspaceDrag()
+              },
               onDragOver: event => {
+                if (workspaceDrag !== null) {
+                  /* Workspace reorder: sibling rows only, chosen by row midpoint. */
+                  if (!workspaceSibling) {
+                    /* Keep swallowing the event so the session path below cannot
+                     * mistake a workspace drag for a session drop. */
+                    return
+                  }
+                  event.preventDefault()
+                  event.stopPropagation()
+                  try {
+                    event.dataTransfer.dropEffect = 'move'
+                  } catch {
+                    /* ignore */
+                  }
+                  const rect = event.currentTarget.getBoundingClientRect()
+                  const half = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+                  if (workspaceDropHalf !== half) hoverWorkspaceDrag(workspaceId, half)
+                  return
+                }
                 if (dragIdRef.current === null) return
                 event.preventDefault()
                 event.stopPropagation()
@@ -1396,9 +1481,10 @@ window.__ModuleLoader__.load({
                 if (isDropTarget) setDropTarget(null)
               },
               onDrop: event => {
-                const id = dragIdRef.current || event.dataTransfer.getData('text/plain')
                 event.preventDefault()
                 event.stopPropagation()
+                if (workspaceDrag !== null) return
+                const id = dragIdRef.current || event.dataTransfer.getData('text/plain')
                 setDropTarget(null)
                 setDraggingId(null)
                 dragIdRef.current = null
@@ -1474,10 +1560,14 @@ window.__ModuleLoader__.load({
           )
 
           const body = []
-          if (visible && hasSessions) body.push(h('div', { key: 'g:' + workspaceId, role: 'group' }, members.map((session, index) => h(SessionRow, { key: 's:' + session.id, session, groupKey: workspaceId, index, bucket: members, env }))))
+          /* Shipped section order: the workspace header, then its child
+           * workspaces, then the workspace's own session rows.  A newly created
+           * child therefore sits directly under its parent instead of at the
+           * bottom of the section. */
           if (visible) {
             for (const child of children) body.push(h(WorkspaceGroup, { key: 'grp:' + child.workspaceId, workspace: child, depth: depth + 1, env }))
           }
+          if (visible && hasSessions) body.push(h('div', { key: 'g:' + workspaceId, role: 'group' }, members.map((session, index) => h(SessionRow, { key: 's:' + session.id, session, groupKey: workspaceId, index, bucket: members, env }))))
           return h(Fragment, { key: 'grp:' + workspaceId }, row, ...body)
         }
 
@@ -1514,6 +1604,11 @@ window.__ModuleLoader__.load({
           const [query, setQuery] = useState('')
           const [draggingId, setDraggingId] = useState(null)
           const [dropTarget, setDropTarget] = useState(null)
+          const [workspaceDrag, setWorkspaceDrag] = useState(null)
+          const workspaceDragRef = useRef(null)
+          /* Some browsers still deliver a click after a drag ends; that click must
+           * not also toggle the group open/closed. */
+          const workspaceClickBlockRef = useRef(false)
           const [menu, setMenu] = useState(null)
           const [renaming, setRenaming] = useState(null)
           const [deleting, setDeleting] = useState(null)
@@ -1635,6 +1730,58 @@ window.__ModuleLoader__.load({
               collapsed: { ...current.collapsed, [workspaceId]: !expanded },
             }))
           }, [])
+
+          /* Workspace reorder. Mirrors the shipped `commitWorkspaceDrag`: the drop
+           * anchor is the next row after the target, and a move that would leave
+           * the order unchanged is dropped instead of being sent to the Host. */
+          const commitWorkspaceDrag = useCallback(
+            (drag, over) => {
+              if (drag === null || over === null) return
+              const owner = view.parentOf.get(drag.workspaceId)
+              if (over !== null && view.parentOf.get(over.id) !== owner) return
+              const siblings = items.filter(item => view.parentOf.get(item.workspaceId) === owner)
+              const rowIndex = siblings.findIndex(item => item.workspaceId === over.id)
+              if (rowIndex === -1) return
+              const anchor = over.half === 'before' ? over.id : (siblings[rowIndex + 1] || {}).workspaceId
+              if (anchor === drag.workspaceId) return
+              const sourceIndex = siblings.findIndex(item => item.workspaceId === drag.workspaceId)
+              const anchorIndex =
+                anchor === undefined ? siblings.length : siblings.findIndex(item => item.workspaceId === anchor)
+              if (sourceIndex !== -1 && (anchorIndex === sourceIndex || anchorIndex === sourceIndex + 1)) return
+              workspaces.insertBefore(drag.workspaceId, anchor).catch(() => {
+                notify(t('errors.reorderFailed'), false)
+              })
+            },
+            [items, view, workspaces, notify, t],
+          )
+
+          const beginWorkspaceDrag = useCallback(workspaceId => {
+            const next = { workspaceId, over: null }
+            workspaceDragRef.current = next
+            workspaceClickBlockRef.current = true
+            setWorkspaceDrag(next)
+          }, [])
+
+          const hoverWorkspaceDrag = useCallback((id, half) => {
+            const current = workspaceDragRef.current
+            if (current === null) return
+            if (current.over !== null && current.over.id === id && current.over.half === half) return
+            const next = { ...current, over: { id, half } }
+            workspaceDragRef.current = next
+            setWorkspaceDrag(next)
+          }, [])
+
+          const endWorkspaceDrag = useCallback(() => {
+            const current = workspaceDragRef.current
+            workspaceDragRef.current = null
+            setWorkspaceDrag(null)
+            if (current !== null && current.over !== null) commitWorkspaceDrag(current, current.over)
+            /* The click that follows a drop arrives after `dragend`; keep the
+             * block for one task so it is swallowed, then re-arm the row. */
+            window.setTimeout(() => {
+              workspaceClickBlockRef.current = false
+            }, 0)
+          }, [commitWorkspaceDrag])
 
           const assignSession = useCallback(
             (sessionId, groupKey, beforeSessionId) => {
@@ -1784,6 +1931,8 @@ window.__ModuleLoader__.load({
             useSessionAccess, useWorkspaceAccess,
             openMenu, openWorkspaceMenu, assignSession, setExpanded, setRenaming,
             menu, menuOpenSessionId, draggingId, dropTarget, dragIdRef, setDraggingId, setDropTarget,
+            workspaceDrag, draggingWorkspaceId: workspaceDrag === null ? null : workspaceDrag.workspaceId,
+            beginWorkspaceDrag, hoverWorkspaceDrag, endWorkspaceDrag, workspaceClickBlockRef,
             now: Date.now(),
           }
 
@@ -1813,6 +1962,7 @@ window.__ModuleLoader__.load({
                     setExpanded(UNGROUPED, ungroupedCollapsed)
                   },
                   onDragOver: event => {
+                    if (workspaceDrag !== null) return
                     if (dragIdRef.current === null) return
                     event.preventDefault()
                     event.stopPropagation()
@@ -1823,9 +1973,12 @@ window.__ModuleLoader__.load({
                     if (isUngroupedDrop) setDropTarget(null)
                   },
                   onDrop: event => {
-                    const id = dragIdRef.current || event.dataTransfer.getData('text/plain')
                     event.preventDefault()
                     event.stopPropagation()
+                    /* The ungrouped bucket is not a real workspace: it accepts
+                     * sessions but must never take part in a workspace reorder. */
+                    if (workspaceDrag !== null) return
+                    const id = dragIdRef.current || event.dataTransfer.getData('text/plain')
                     setDropTarget(null)
                     setDraggingId(null)
                     dragIdRef.current = null

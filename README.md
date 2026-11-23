@@ -25,6 +25,11 @@ name.
 - **Every row keeps its affordances.** Each workspace row, child or not, has the
   same `…` menu (add child, new session, rename, delete) and the same
   new-session button.
+- **Reorder workspaces.** Drag a workspace row above or below another row that
+  shares its parent: a child moves among its siblings, a root moves among the
+  roots, and a drag that would cross the parent boundary is refused so a child
+  can never be hoisted out of the workspace it belongs to. A newly created child
+  is anchored above its existing siblings instead of below them.
 - **Last-used time.** Every session row shows how long ago it was last used
   (`刚刚 / 12分钟 / 3小时 / 2天`, `now / 12min / 3h / 2d`), hover-swapped for the
   row buttons exactly like the shipped browser. The full sentence (`12分钟前`)
@@ -84,6 +89,7 @@ Right-click any workspace in the sidebar.
 | --- | --- |
 | Rename the section title | double-click the 「工作区」 label |
 | Add a child workspace | workspace `…` menu → 添加子工作区 |
+| Reorder workspaces | drag a workspace row above or below a sibling that shares its parent |
 | New session in a child | the `+` on the child's row |
 | File a session under another workspace | drag the session row, or session `…` menu → 移动到工作区 |
 | Rename / delete a workspace | double-click its title, or its `…` menu |

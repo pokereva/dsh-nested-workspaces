@@ -81,6 +81,12 @@ window.__ModuleLoader__.load({
         'actions.unpin': '取消置顶',
         'row.pinned': '已置顶',
         'errors.pinFailed': '置顶状态更新失败',
+        'status.running': '正在工作',
+        'status.subagentsRunning': '{n}个子代理正在运行',
+        'status.completed': '已完成',
+        'status.waitingApproval': '等待批准',
+        'status.planReview': '等待确认计划',
+        'status.waitingAnswer': '等待回答',
         'errors.reorderFailed': '工作区排序更新失败',
         'errors.invalidParent': 'The parent workspace directory is not usable.',
         'errors.unreadable': 'The new directory could not be read.',
@@ -141,6 +147,12 @@ window.__ModuleLoader__.load({
         'actions.unpin': 'Unpin',
         'row.pinned': 'Pinned',
         'errors.pinFailed': 'Could not update the pin',
+        'status.running': 'Working',
+        'status.subagentsRunning': '{n} subagents running',
+        'status.completed': 'Completed',
+        'status.waitingApproval': 'Waiting for approval',
+        'status.planReview': 'Waiting for plan review',
+        'status.waitingAnswer': 'Waiting for an answer',
         'errors.reorderFailed': 'Could not reorder the workspace',
         'errors.invalidParent': 'The parent workspace directory is not usable.',
         'errors.unreadable': 'The new directory could not be read.',
@@ -201,6 +213,12 @@ window.__ModuleLoader__.load({
         'actions.unpin': 'ピン留めを解除',
         'row.pinned': 'ピン留め済み',
         'errors.pinFailed': 'ピン留めを更新できませんでした',
+        'status.running': '実行中',
+        'status.subagentsRunning': '{n}件のサブエージェントが実行中',
+        'status.completed': '完了',
+        'status.waitingApproval': '承認待ち',
+        'status.planReview': 'プラン確認待ち',
+        'status.waitingAnswer': '回答待ち',
         'errors.reorderFailed': 'ワークスペースの並び順を更新できませんでした',
         'errors.invalidParent': '親ワークスペースのディレクトリを使用できません。',
         'errors.unreadable': '作成したディレクトリを読み取れませんでした。',
@@ -252,8 +270,20 @@ window.__ModuleLoader__.load({
 @media (hover:hover){.dnw-row:hover .dnw-resting,html[data-input-modality='keyboard'] .dnw-row:focus-within .dnw-resting{display:none}}
 .dnw-row:has(.dnw-actionsOpen) .dnw-resting{display:none}
 @media (hover:none){.dnw-actions{display:flex}.dnw-resting{display:none}}
-.dnw-dot{width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-business-primary);flex:none}
-.dnw-dotIdle{background:var(--dsw-alias-label-caption);opacity:.5}
+.dnw-stateDot{position:relative;display:inline-block;flex:none;border-radius:50%}
+.dnw-stateDot::after{content:"";position:absolute;inset:20%;border-radius:50%;background:currentColor}
+.dnw-stateDot[data-state=done]{color:var(--dsw-alias-state-success-primary)}
+.dnw-stateDot[data-state=warning]{color:var(--dsw-alias-state-warn-primary)}
+.dnw-stateDot[data-state=error]{color:var(--dsw-alias-state-error-primary)}
+.dnw-spinner{flex:none;color:var(--dsw-alias-label-tertiary)}
+.dnw-spinnerMotion{transform-origin:center;animation:dnw-state-dot-spin 1.5s linear infinite}
+.dnw-spinnerTrack,.dnw-spinnerArc{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+.dnw-spinnerTrack{opacity:.25}
+.dnw-spinnerArc{stroke-dasharray:12 150;animation:dnw-state-dot-dash 1.5s ease-in-out infinite}
+@keyframes dnw-state-dot-spin{to{transform:rotate(360deg)}}
+@keyframes dnw-state-dot-dash{0%{stroke-dasharray:12 150;stroke-dashoffset:0}50%{stroke-dasharray:24 150;stroke-dashoffset:-6}to{stroke-dasharray:12 150;stroke-dashoffset:0}}
+@media (prefers-reduced-motion:reduce){.dnw-spinnerMotion,.dnw-spinnerArc{animation:none}.dnw-spinnerArc{stroke-dasharray:18 150;stroke-dashoffset:-3}}
+.dnw-visuallyHidden{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 .dnw-empty{padding:2px 8px 4px;padding-inline-start:calc(var(--dsh-sidebar-row-padding,12px) + 22px + var(--dnw-indent,0px));font-size:13px;line-height:20px;color:var(--dsw-alias-label-caption)}
 .dnw-dropBefore::before,.dnw-dropAfter::after{content:"";position:absolute;left:calc(-1 * var(--dsh-sidebar-paint-inset,3px));right:calc(4px - var(--dsh-sidebar-paint-inset,3px));height:2px;border-radius:1px;background:var(--dsw-alias-state-business-primary)}
 .dnw-dropBefore::before{top:-8px}
@@ -397,6 +427,44 @@ window.__ModuleLoader__.load({
     function hoverTimeLabel(updatedAt, now, t) {
       const { unit, n } = relativeTime(updatedAt, now)
       return unit === 'now' ? t('time.now') : t('time.ago', { t: t('time.' + unit, { n }) })
+    }
+
+    /** Shipped runningChildCount: sessions in this one's subagent catalog still running. */
+    function runningSubagentCount(list, parentId, statuses) {
+      const entry = list !== null && list !== undefined && list.projectionsBySession !== undefined ? list.projectionsBySession[parentId] : undefined
+      const catalog = entry !== undefined && entry !== null && entry.values !== undefined ? entry.values.subagentCatalog : undefined
+      if (!Array.isArray(catalog)) return 0
+      let count = 0
+      for (const child of catalog) {
+        const childStatus = statuses.get(child.id)
+        const running = childStatus === undefined ? list.byId[child.id] !== undefined && list.byId[child.id].running === true : childStatus.running === true
+        if (running) count += 1
+      }
+      return count
+    }
+
+    /* The shipped browser's working indicator: a 14px stroked arc that spins
+     * while the stroke length breathes.  Both keyframes and the reduced-motion
+     * fallback live in the stylesheet below. */
+    function StatusSpinner() {
+      return h(
+        'svg',
+        {
+          className: 'dnw-spinner',
+          'data-state': 'ongoing',
+          width: '14',
+          height: '14',
+          viewBox: '0 0 24 24',
+          'aria-hidden': 'true',
+          focusable: 'false',
+        },
+        h(
+          'g',
+          { className: 'dnw-spinnerMotion' },
+          h('circle', { className: 'dnw-spinnerTrack', cx: '12', cy: '12', r: '9.5' }),
+          h('circle', { className: 'dnw-spinnerArc', cx: '12', cy: '12', r: '9.5' }),
+        ),
+      )
     }
 
     function isRecord(value) {
@@ -1172,13 +1240,40 @@ window.__ModuleLoader__.load({
          */
         function SessionRow(props) {
           const { session, groupKey, index, bucket, env } = props
-          const { view, statuses, t, uiWorkspace, useSessionAccess, openMenu, assignSession, dragIdRef, draggingId, dropTarget, setDropTarget, setDraggingId, now } = env
+          const { view, statuses, t, uiWorkspace, list, useSessionAccess, openMenu, assignSession, dragIdRef, draggingId, dropTarget, setDropTarget, setDraggingId, now } = env
           const isArchived = view.archived.has(session.id)
           const isPinned = view.pinned.has(session.id) && !isArchived
           const label = session.blank ? (session.id === view.currentId ? t('session.new') : t('session.untitled')) : sessionTitle(session)
           const title = label === '' ? t('session.untitled') : label
           const status = statuses.get(session.id)
           const running = status !== undefined && status.running === true
+          /* Shipped precedence (ui-workspace Rows.tsx sessionStatuses): a pending
+           * interaction wins, then running, then running subagents, then an unread
+           * completion, and otherwise the row is idle and draws no glyph. */
+          const pendingKind = status === undefined ? undefined : status.pendingInteraction === undefined ? undefined : status.pendingInteraction.kind
+          const runningChildren = runningSubagentCount(list, session.id, statuses)
+          const statusState =
+            session.blank || isArchived
+              ? 'idle'
+              : pendingKind !== undefined && pendingKind !== null
+                ? 'warning'
+                : running
+                  ? 'ongoing'
+                  : runningChildren > 0
+                    ? 'ongoing'
+                    : status !== undefined && status.completionUnread === true
+                      ? 'done'
+                      : 'idle'
+          const statusLabel =
+            statusState === 'idle'
+              ? null
+              : statusState === 'warning'
+                ? t(pendingKind === 'approval' ? 'status.waitingApproval' : pendingKind === 'plan-review' ? 'status.planReview' : 'status.waitingAnswer')
+                : statusState === 'ongoing'
+                  ? running
+                    ? t('status.running')
+                    : t('status.subagentsRunning', { n: runningChildren })
+                  : t('status.completed')
           const selected = session.id === view.currentId
           const canUnarchive = useSessionAccess(session.id, 'workspace/unarchiveSession')
           const canMove = useSessionAccess(session.id, 'workspace/insertSessionBefore')
@@ -1321,10 +1416,17 @@ window.__ModuleLoader__.load({
               },
               onClick: activate,
             },
+            /* Leading cell, matching the shipped browser: an idle session shows
+             * nothing at all, a running one shows the rotating spinner, and a
+             * pending interaction or unread completion shows a state dot. */
             h(
               'span',
               { className: 'dnw-slot' },
-              running ? h('span', { className: 'dnw-dot' }) : h('span', { className: cls('dnw-dot', 'dnw-dotIdle') }),
+              statusState === 'ongoing' ? h(StatusSpinner, null) : null,
+              statusState !== 'ongoing' && statusState !== 'idle'
+                ? h('span', { className: 'dnw-stateDot', 'data-state': statusState, style: { width: '10px', height: '10px' }, 'aria-hidden': 'true' })
+                : null,
+              statusLabel === null ? null : h('span', { className: 'dnw-visuallyHidden' }, statusLabel),
             ),
             h('span', { className: cls('dnw-title', (session.blank || isArchived) && 'dnw-titleMuted') }, title),
             /* Resting cell: the last-used time and, when pinned, the pin glyph —
@@ -1567,7 +1669,7 @@ window.__ModuleLoader__.load({
           if (visible) {
             for (const child of children) body.push(h(WorkspaceGroup, { key: 'grp:' + child.workspaceId, workspace: child, depth: depth + 1, env }))
           }
-          if (visible && hasSessions) body.push(h('div', { key: 'g:' + workspaceId, role: 'group' }, members.map((session, index) => h(SessionRow, { key: 's:' + session.id, session, groupKey: workspaceId, index, bucket: members, env }))))
+          if (visible && hasSessions) body.push(h('div', { key: 'g:' + workspaceId, role: 'group', style: indent }, members.map((session, index) => h(SessionRow, { key: 's:' + session.id, session, groupKey: workspaceId, index, bucket: members, env }))))
           return h(Fragment, { key: 'grp:' + workspaceId }, row, ...body)
         }
 
@@ -1927,7 +2029,7 @@ window.__ModuleLoader__.load({
 
           /* One bag of closures for the row components; rebuilt each render. */
           const env = {
-            view, state, statuses, t, uiWorkspace,
+            view, state, statuses, t, uiWorkspace, list,
             useSessionAccess, useWorkspaceAccess,
             openMenu, openWorkspaceMenu, assignSession, setExpanded, setRenaming,
             menu, menuOpenSessionId, draggingId, dropTarget, dragIdRef, setDraggingId, setDropTarget,

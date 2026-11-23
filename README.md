@@ -37,6 +37,13 @@ name.
 - **Pin.** The row's pin button pins the session; pinned rows show a filled pin
   glyph beside the time and sort to the top of their workspace. The session `…`
   menu offers the same toggle as **置顶 / 取消置顶**.
+- **Row status, like the shipped browser.** An idle session row draws nothing in
+  front of its title. While the session is working it shows the same rotating
+  ring the built-in sidebar uses; a pending approval, plan review or question
+  shows the amber warning dot, and an unread completion shows the green dot.
+- **Nested indent.** A session row sitting inside a child workspace is indented
+  by the same 12px step as that child, so sessions line up under their own
+  workspace instead of under the root.
 - **Workspace rename and delete.** Double-click a workspace title to rename it in
   place; the `…` menu offers the same plus a delete confirmation. Deleting a
   workspace only removes it from the sidebar — the folder and its sessions stay on
@@ -95,6 +102,7 @@ Right-click any workspace in the sidebar.
 | Rename / delete a workspace | double-click its title, or its `…` menu |
 | Pin / unpin a session | the pin button on its row, or session `…` menu → 置顶 |
 | See the last-used time | the resting label on its row; hover for the sentence |
+| See whether a session is working | the rotating ring in front of its title |
 | Show archived sessions | the archive button in the section header |
 
 ## Languages

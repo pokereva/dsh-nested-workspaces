@@ -831,6 +831,49 @@ const timeTexts = orderPass.nodes
 check('resting cells render a relative time label', timeTexts.every((text) => text.trim() !== ''), JSON.stringify(timeTexts));
 check('relative time buckets differ for 2h and 5min', new Set(timeTexts).size === 2, JSON.stringify(timeTexts));
 
+/* Leading status cell, matching the shipped browser: idle rows draw nothing,
+ * a running row draws the spinner, and a pending interaction draws a dot. */
+const dotNodes = orderPass.nodes.filter((entry) => entry.kind === 'element' && entry.props.className === 'dnw-stateDot');
+const spinnerNodes = orderPass.nodes.filter((entry) => entry.kind === 'element' && entry.props.className === 'dnw-spinner');
+check('idle session rows draw no status glyph', dotNodes.length === 0 && spinnerNodes.length === 0, 'dots=' + dotNodes.length + ' spinners=' + spinnerNodes.length);
+
+const runningStatuses = new Map([['s1', { running: true, pendingInteraction: undefined, completionUnread: false }]]);
+const runningPass = renderOnce(Object.assign({}, props, { useSessionStatus: selectorHook(runningStatuses) }));
+check('a running session renders', runningPass.error === null, runningPass.error && (runningPass.error.stack || String(runningPass.error)));
+const runningSpinners = runningPass.nodes.filter((entry) => entry.kind === 'element' && entry.props.className === 'dnw-spinner');
+check('a running session draws the spinner', runningSpinners.length === 1, 'spinners=' + runningSpinners.length);
+const runningDots = runningPass.nodes.filter((entry) => entry.kind === 'element' && entry.props.className === 'dnw-stateDot');
+check('a running session draws no idle dot', runningDots.length === 0, 'dots=' + runningDots.length);
+const spinnerSvg = runningSpinners[0];
+const motionGroups = runningPass.nodes.filter((entry) => entry.kind === 'element' && entry.props.className === 'dnw-spinnerMotion');
+const trackNodes = runningPass.nodes.filter((entry) => entry.kind === 'element' && entry.props.className === 'dnw-spinnerTrack');
+const arcNodes = runningPass.nodes.filter((entry) => entry.kind === 'element' && entry.props.className === 'dnw-spinnerArc');
+check(
+  'the spinner is the shipped two-ring arc',
+  spinnerSvg !== undefined &&
+    spinnerSvg.props.viewBox === '0 0 24 24' &&
+    motionGroups.length === 1 &&
+    trackNodes.length === 1 &&
+    arcNodes.length === 1 &&
+    trackNodes[0].props.r === '9.5' &&
+    arcNodes[0].props.r === '9.5',
+  JSON.stringify({ groups: motionGroups.length, tracks: trackNodes.length, arcs: arcNodes.length }),
+);
+
+const waitingStatuses = new Map([['s1', { running: false, pendingInteraction: { kind: 'approval' }, completionUnread: false }]]);
+const waitingPass = renderOnce(Object.assign({}, props, { useSessionStatus: selectorHook(waitingStatuses) }));
+const waitingDots = waitingPass.nodes.filter((entry) => entry.kind === 'element' && entry.props.className === 'dnw-stateDot');
+check('a pending approval draws the warning dot', waitingDots.length === 1 && waitingDots[0].props['data-state'] === 'warning', 'dots=' + waitingDots.length);
+
+/* Session rows inherit the indent of the group they sit in, so a child
+ * workspace's sessions line up under that child rather than under the root. */
+const groupIndents = bigPass.nodes
+  .filter((entry) => entry.kind === 'element' && entry.props.role === 'group' && entry.props.style !== undefined)
+  .map((entry) => entry.props.style['--dnw-indent']);
+check('session groups carry the owning workspace indent', groupIndents.indexOf('0px') >= 0 && groupIndents.indexOf('12px') >= 0, JSON.stringify(groupIndents));
+check('one session group per workspace with sessions', groupIndents.length === 3, JSON.stringify(groupIndents));
+
+
 /* While a row's shared menu is open its action cluster stays visible — the menu
  * portals away from the row, so :hover / :focus-within cannot hold. */
 let activeTarget = null;

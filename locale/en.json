@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Nested workspaces",
-    "description": "Turn the sidebar into a workspace tree. Double-click the section title to rename it, right-click any workspace to add a child workspace created inside that workspace directory (the plugin Host half makes the folder itself, so the OS-only directory picker is not needed), and drag or move sessions between workspaces. Every session row shows when it was last used and carries a pin marker once pinned. Child workspaces keep their own menu and new-session button."
+    "description": "Nested child workspaces in the DeepSeek Harness sidebar. Create a child workspace inside its parent folder without the OS picker, drag workspaces to reorder siblings, drag sessions between workspaces, rename the section title by double-clicking, and see each session last-used time and pin marker."
   }
 }

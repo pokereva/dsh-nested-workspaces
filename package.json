@@ -1,6 +1,6 @@
 {
   "name": "dsh-nested-workspaces",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": false,
   "type": "module",
   "description": "Nested child workspaces in the DeepSeek Harness sidebar: editable section title, an Add child workspace menu, and sessions you can drag between workspaces.",

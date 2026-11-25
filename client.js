@@ -90,7 +90,6 @@ window.__ModuleLoader__.load({
         'status.planReview': '等待确认计划',
         'status.waitingAnswer': '等待回答',
         'errors.reorderFailed': '工作区排序更新失败',
-        'errors.invalidParent': 'The parent workspace directory is not usable.',
         'errors.unreadable': 'The new directory could not be read.',
       },
       en: {
@@ -158,7 +157,6 @@ window.__ModuleLoader__.load({
         'status.planReview': 'Waiting for plan review',
         'status.waitingAnswer': 'Waiting for an answer',
         'errors.reorderFailed': 'Could not reorder the workspace',
-        'errors.invalidParent': 'The parent workspace directory is not usable.',
         'errors.unreadable': 'The new directory could not be read.',
       },
       ja: {
@@ -226,7 +224,6 @@ window.__ModuleLoader__.load({
         'status.planReview': 'プラン確認待ち',
         'status.waitingAnswer': '回答待ち',
         'errors.reorderFailed': 'ワークスペースの並び順を更新できませんでした',
-        'errors.invalidParent': '親ワークスペースのディレクトリを使用できません。',
         'errors.unreadable': '作成したディレクトリを読み取れませんでした。',
       },
     }
@@ -801,7 +798,6 @@ window.__ModuleLoader__.load({
             }
             /* The Host answers these two with a stable code and an English OS
              * string; show the localized wording instead of the raw message. */
-            if (code === 'nested-workspaces/invalid-parent') return t('errors.invalidParent')
             if (code === 'directory-picker/unreadable') return t('errors.unreadable')
             return t('errors.createFailed', { message })
           }
@@ -827,7 +823,9 @@ window.__ModuleLoader__.load({
                 const id = newChildId()
                 store.update(state => ({
                   ...state,
-                  children: [...state.children, { id, parentId: request.parentId, title: trimmed }],
+                  /* Prepend: a freshly added child sits at the top of its
+                   * siblings, the same place the shipped browser puts one. */
+                  children: [{ id, parentId: request.parentId, title: trimmed }, ...state.children],
                   collapsed: { ...state.collapsed, [request.parentId]: false },
                 }))
                 notify(t('createdChild'), true)

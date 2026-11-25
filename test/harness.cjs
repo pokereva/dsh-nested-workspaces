@@ -1025,6 +1025,52 @@ const createdRow = rowsOf(afterCreate).filter((row) => String(row.props['aria-la
 check('the new child renders as a row of its own', createdRow !== undefined, JSON.stringify(rowsOf(afterCreate).map((row) => row.props['aria-label'])));
 check('the created child is not a Host workspace', createdRow !== undefined && registryItems.length === 3, 'items=' + registryItems.length);
 
+/* A second child must sit above the first: new records are prepended, so the
+ * group renders in the order it was created from newest to oldest. */
+addChildRequestSet({ parentId: 'ws-p', parentPath: null, parentTitle: 'root' });
+let secondPass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+const secondInput = secondPass.nodes.filter((entry) => entry.kind === 'element' && entry.props.className === 'dnw-dialogInput')[0];
+if (secondInput !== undefined) secondInput.props.onChange({ target: { value: 'newerkid' } });
+secondPass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+const secondConfirm = secondPass.nodes.filter(
+  (entry) => entry.kind === 'element' && typeof entry.props.className === 'string' && /dnw-buttonPrimary/.test(entry.props.className),
+)[0];
+if (secondConfirm !== undefined) secondConfirm.props.onClick();
+for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
+const orderedPass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+const orderLabels = rowsOf(orderedPass).map((row) => String(row.props['aria-label'] || ''));
+const newerAt = orderLabels.findIndex((label) => label.indexOf('newerkid \u2014') === 0);
+const olderAt = orderLabels.findIndex((label) => label.indexOf('newkid \u2014') === 0);
+check(
+  'a newly added child renders above the older siblings',
+  newerAt !== -1 && olderAt !== -1 && newerAt < olderAt,
+  JSON.stringify(orderLabels),
+);
+
+workspacesCall.length = 0;
+let vdragPass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+const virtualRow = (pass, title) =>
+  rowsOf(pass).filter((row) => String(row.props['aria-label'] || '').indexOf(title + ' \u2014') === 0)[0];
+const dragSource = virtualRow(vdragPass, 'newkid');
+check('a child group row can start a workspace drag', dragSource !== undefined);
+if (dragSource !== undefined) dragSource.props.onDragStart(dragEvent({ closest: () => null }, 0));
+vdragPass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+const dragTarget = virtualRow(vdragPass, 'newerkid');
+if (dragTarget !== undefined) dragTarget.props.onDragOver(Object.assign(dragEvent({ closest: () => null }, 4), { currentTarget: { getBoundingClientRect: fakeRect } }));
+vdragPass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+const sourceAgain = virtualRow(vdragPass, 'newkid');
+if (sourceAgain !== undefined) sourceAgain.props.onDragEnd();
+vdragPass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+const afterDragLabels = rowsOf(vdragPass).map((row) => String(row.props['aria-label'] || ''));
+const newkidAt = afterDragLabels.findIndex((label) => label.indexOf('newkid \u2014') === 0);
+const newerkidAt = afterDragLabels.findIndex((label) => label.indexOf('newerkid \u2014') === 0);
+check(
+  'dragging a child group above its sibling reorders the records',
+  newkidAt !== -1 && newerkidAt !== -1 && newkidAt < newerkidAt,
+  JSON.stringify(afterDragLabels),
+);
+check('reordering child groups never calls the Host', workspacesCall.length === 0, JSON.stringify(workspacesCall));
+
 /* A virtual group has no directory: its new-session button must start the
  * session in the nearest REAL ancestor (ws-p here), then file the row under
  * the group record. */

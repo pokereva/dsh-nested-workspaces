@@ -96,6 +96,10 @@ row list). A few things come with that trade:
   serves the OS chooser (the `native` capability cannot
   `createDirectory`). Children are now records in the browser store, so the
   add-child dialog works everywhere and never touches the filesystem.
+- **Upgrading from 1.x.** Children made by 1.x are real folders that were also
+  registered with the Host, so they still show up as ordinary workspaces. Delete
+  them here (the folder stays on disk) and add them again as groups if you want
+  them to become records.
 
 ## Using it
 

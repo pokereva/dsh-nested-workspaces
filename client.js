@@ -550,11 +550,6 @@ window.__ModuleLoader__.load({
       return [...rest.slice(0, at), record, ...rest.slice(at)]
     }
 
-    /** The child records that sit directly under one group, in stored order. */
-    function childrenOfParent(children, parentId) {
-      return children.filter(entry => entry.parentId === parentId)
-    }
-
     function createStore() {
       const read = () => {
         const empty = { title: null, assign: {}, order: {}, collapsed: {}, children: [] }

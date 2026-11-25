@@ -1257,6 +1257,32 @@ window.__ModuleLoader__.load({
                 return
               }
               await workspaces.delete(workspace.workspaceId)
+              /* Its child groups can no longer be reached through the tree, so
+               * drop the records instead of leaving them orphaned in storage. */
+              const orphans = new Set([workspace.workspaceId])
+              let spread = true
+              while (spread) {
+                spread = false
+                for (const entry of store.get().children) {
+                  if (orphans.has(entry.parentId) && !orphans.has(entry.id)) {
+                    orphans.add(entry.id)
+                    spread = true
+                  }
+                }
+              }
+              if (orphans.size > 1) {
+                store.update(current => {
+                  const assign = { ...current.assign }
+                  for (const [sessionId, groupKey] of Object.entries(assign)) {
+                    if (orphans.has(groupKey)) delete assign[sessionId]
+                  }
+                  return {
+                    ...current,
+                    children: current.children.filter(entry => !orphans.has(entry.id)),
+                    assign,
+                  }
+                })
+              }
               notify(t('deleted'), true)
               onClose()
             } catch (failure) {

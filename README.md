@@ -3,9 +3,11 @@
 Nested child workspaces for the DeepSeek Harness sidebar.
 
 DeepSeek Harness lists every workspace as a peer. This plugin turns that list
-into a tree: a workspace can own child workspaces that live inside its directory,
-sessions can be filed under any workspace, and the section title becomes yours to
-name.
+into a tree: a workspace can own child workspace *groups*, sessions can be filed
+under any group, and the section title becomes yours to name.
+
+A child is a grouping record kept by this plugin, not a new folder on disk — the
+project directory is left exactly as it was.
 
 ## What it does
 
@@ -14,10 +16,14 @@ name.
   the same from the keyboard. The name is stored in this browser and falls back to
   the built-in label when emptied.
 - **Add child workspace.** Right-click a workspace (or use its `…` menu) and pick
-  **添加子工作区 / Add child workspace**. The dialog asks for a folder name and
-  creates that directory *inside* the parent workspace's directory, then registers
-  it as a workspace. Because the child path sits under the parent path, the tree
-  nests it automatically.
+  **添加子工作区 / Add child workspace**. The dialog asks for a name and records a
+  child group under that workspace. **Nothing is created on disk** — the child is a
+  grouping kept in this plugin's own browser storage, so you can split a project
+  into sections without littering the repository with empty folders.
+- **New sessions run where the code is.** The `+` on a child group starts the
+  session in the nearest real workspace above it (the root, or the parent group's
+  real workspace), then files the new row under the child. The child never becomes
+  a workspace, so DSH's path binding stays consistent.
 - **File sessions under any workspace.** Drag a session row onto a workspace
   header, or drop it above/below another session to place it exactly. The `…` menu
   on every session also offers **移动到工作区 / Move to workspace** with one entry
@@ -61,8 +67,13 @@ directory with the workspace path. A session therefore cannot be re-homed to a
 workspace with a different path. Filing a session under another workspace is a
 *view* assignment kept by this plugin: the row is shown under the workspace you
 dropped it on, and open/fork/archive keep working, but the session's own working
-directory is unchanged. New sessions you start from a child workspace do get the
-child directory as their working directory, because they are created there.
+directory is unchanged.
+
+A child workspace is a group, so it has no directory of its own either — the `+`
+on a child starts its session in the nearest real workspace above it, and the
+session then appears under that child. Deleting a child group deletes the record
+and its nested groups; the sessions it showed return to the workspace that really
+owns them.
 
 This plugin replaces the shipped workspace browser (it registers the same sidebar
 seat at a lower priority, which is the only way to own the section title and the
@@ -80,13 +91,11 @@ row list). A few things come with that trade:
   `sidebar.session.row.hover`) are not rendered on these rows, so additions other
   plugins place in them will not appear inside this section. The session `…` menu
   is unaffected and remains the supported extension point.
-- **Add child workspace does not need the browse picker.** A Host whose composed
-  directory picker is the OS chooser (the `native` capability) cannot serve
-  `directoryPicker.createDirectory`. This bundle's Host half therefore creates the
-  folder itself over the Connection route `/api/nested-workspaces`. The plugin
-  falls back to the shipped `createDirectory` endpoint if that route cannot be
-  called (for example an older Host half), which on a `native`-only Host is the
-  error you would otherwise see.
+- **Add child workspace needs no Host support at all.** Earlier versions created
+  a real directory, which failed on a Host whose composed directory picker only
+  serves the OS chooser (the `native` capability cannot
+  `createDirectory`). Children are now records in the browser store, so the
+  add-child dialog works everywhere and never touches the filesystem.
 
 ## Using it
 

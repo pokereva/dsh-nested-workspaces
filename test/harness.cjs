@@ -247,7 +247,7 @@ const requireStub = (specifier) => {
 const plugin = loaded.factory(requireStub);
 check('plugin exports apply()', typeof plugin.apply === 'function');
 check('plugin declares its inject list', Array.isArray(plugin.inject));
-for (const service of ['slots', 'locale', 'contextMenus', 'workspaces', 'uiWorkspace', 'sessions', 'connection']) {
+for (const service of ['slots', 'locale', 'contextMenus', 'workspaces', 'uiWorkspace', 'sessions']) {
   check('inject includes ' + service, plugin.inject.indexOf(service) >= 0, JSON.stringify(plugin.inject));
 }
 
@@ -315,7 +315,11 @@ const uiWorkspaceService = {
   unpinSession: async () => {},
   forkSession: () => {},
   connectWorkspace: () => {},
-  openWorkspace: () => {},
+  openWorkspace: (workspaceId, beforeOpen) => {
+    uiWorkspaceCalls.push(['openWorkspace', workspaceId]);
+    if (typeof beforeOpen === 'function') beforeOpen('s9');
+    return Promise.resolve();
+  },
   whenAccess: () => () => {},
 };
 
@@ -520,7 +524,7 @@ function walk(node) {
     return;
   }
   if (typeof node === 'object' && node.props !== undefined) {
-    collected.push({ kind: 'element', type: node.type, props: node.props });
+    collected.push({ kind: 'element', type: node.type, props: node.props, key: node.key });
     /* A function element is a component: run it so its own hooks and children
      * are part of this pass. This is what makes a hook-order change visible. */
     if (typeof node.type === 'function') {
@@ -993,11 +997,12 @@ dragPass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(sco
 rowFor(dragPass, 'ws-c1').props.onDragEnd();
 check('a workspace drag cannot leave its parent', workspacesCall.length === 0, JSON.stringify(workspacesCall));
 
-/* Requirement: a newly created child lands ABOVE its existing siblings. */
+/* Requirement: adding a child workspace creates NO directory and NO Host
+ * workspace — it is a record in this plugin's store. */
 registryItems.length = 0;
 registryItems.push(scopeFixture[0], scopeFixture[1], scopeFixture[2]);
 workspacesCall.length = 0;
-addChildRequestSet({ parentId: 'ws-p', parentPath: 'C:/repo/p', parentTitle: 'root' });
+addChildRequestSet({ parentId: 'ws-p', parentPath: null, parentTitle: 'root' });
 let dialogPass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
 const input = dialogPass.nodes.filter((entry) => entry.kind === 'element' && entry.props.className === 'dnw-dialogInput')[0];
 check('the add-child dialog renders an input', input !== undefined);
@@ -1011,95 +1016,136 @@ confirm.props.onClick();
 for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
 await new Promise((resolve) => setTimeout(resolve, 0));
 check(
-  'creating a child registers it and anchors it above its siblings',
-  JSON.stringify(workspacesCall) === JSON.stringify([['create', { path: 'C:/repo/p/newkid' }], ['insertBefore', 'ws-new', 'ws-c1']]),
+  'creating a child touches neither the filesystem nor the Host registry',
+  workspacesCall.length === 0,
   JSON.stringify(workspacesCall),
 );
-addChildRequestSet(null);
+const afterCreate = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+const createdRow = rowsOf(afterCreate).filter((row) => String(row.props['aria-label'] || '').indexOf('newkid —') === 0)[0];
+check('the new child renders as a row of its own', createdRow !== undefined, JSON.stringify(rowsOf(afterCreate).map((row) => row.props['aria-label'])));
+check('the created child is not a Host workspace', createdRow !== undefined && registryItems.length === 3, 'items=' + registryItems.length);
+
+/* A virtual group has no directory: its new-session button must start the
+ * session in the nearest REAL ancestor (ws-p here), then file the row under
+ * the group record. */
+uiWorkspaceCalls.length = 0;
+const sessionFixture9 = {
+  ids: ['s9'],
+  byId: { s9: { id: 's9', title: 'ninth', displayTitle: 'ninth', cwd: 'C:/repo/p', running: false, retainedBy: {}, blank: false, updatedAt: '2026-01-07T00:00:00.000Z' } },
+  phase: 'ready',
+  projectionsBySession: {},
+};
+const plusForChild = afterCreate.nodes.filter(
+  (entry) =>
+    entry.kind === 'element' &&
+    typeof (entry.props && entry.props['aria-label']) === 'string' &&
+    entry.props['aria-label'].indexOf('newkid') >= 0 &&
+    entry.props['aria-label'].indexOf('新建会话') === 0,
+)[0];
+check('the child group carries its own new-session button', plusForChild !== undefined, JSON.stringify(afterCreate.nodes.filter((entry) => entry.kind === 'element').map((entry) => entry.props && entry.props['aria-label']).filter(Boolean)));
+if (plusForChild !== undefined) plusForChild.props.onClick({ stopPropagation: () => {} });
+for (let tick = 0; tick < 4; tick += 1) await Promise.resolve();
+check(
+  'a new session in a child group starts in the nearest real workspace',
+  JSON.stringify(uiWorkspaceCalls) === JSON.stringify([['openWorkspace', 'ws-p']]),
+  JSON.stringify(uiWorkspaceCalls),
+);
+const filed = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(sessionFixture9) }), { keepState: true });
+check('the created session is filed under the child group', filed.text.indexOf('ninth') >= 0, filed.text.slice(0, 200));
+
+/* Rename acts on the record, not on a Host workspace. */
+const createdTitle = afterCreate.nodes.filter(
+  (entry) => entry.kind === 'element' && typeof entry.props.className === 'string' && /(^|\s)dnw-title(\s|$)/.test(entry.props.className) && String(entry.props.title || '').length > 0,
+).filter((entry) => String(entry.props.children || '') === 'newkid')[0];
+check('the child group title is renameable', createdTitle !== undefined && typeof createdTitle.props.onDoubleClick === 'function');
+if (createdTitle !== undefined) createdTitle.props.onDoubleClick({ preventDefault: () => {}, stopPropagation: () => {} });
+let renamePass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+const renameInput = renamePass.nodes.filter((entry) => entry.kind === 'element' && entry.props.className === 'dnw-dialogInput')[0];
+check('renaming a child group opens a dialog', renameInput !== undefined);
+if (renameInput !== undefined) {
+  renameInput.props.onChange({ target: { value: 'renamedgroup' } });
+  renamePass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+  const renameConfirm = renamePass.nodes.filter(
+    (entry) => entry.kind === 'element' && typeof entry.props.className === 'string' && /dnw-buttonPrimary/.test(entry.props.className),
+  )[0];
+  check('the rename dialog renders a confirm button', renameConfirm !== undefined);
+  if (renameConfirm !== undefined) renameConfirm.props.onClick();
+  for (let tick = 0; tick < 4; tick += 1) await Promise.resolve();
+}
+const renamedPass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+check(
+  'renaming a child group rewrites the record title',
+  rowsOf(renamedPass).some((row) => String(row.props['aria-label'] || '').indexOf('renamedgroup \u2014') === 0),
+  JSON.stringify(rowsOf(renamedPass).map((row) => row.props['aria-label'])),
+);
+check('renaming a child group never calls the Host', workspacesCall.every((call) => call[0] !== 'rename'), JSON.stringify(workspacesCall));
+
+/* Delete removes the record and its subtree without touching the Host. */
+const renamedRow = rowsOf(renamedPass).filter((row) => String(row.props['aria-label'] || '').indexOf('renamedgroup \u2014') === 0)[0];
+check('the renamed child group still renders', renamedRow !== undefined);
+if (renamedRow !== undefined) {
+  renamedRow.props.onContextMenu({
+    preventDefault: () => {},
+    stopPropagation: () => {},
+    type: 'contextmenu',
+    clientX: 10,
+    clientY: 10,
+    currentTarget: { getBoundingClientRect: fakeRect },
+  });
+}
+let deletePass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+const deleteItem = deletePass.nodes.filter(
+  (entry) => entry.kind === 'element' && typeof entry.props.className === 'string' && /(^|\s)dnw-menuItemDanger(\s|$)/.test(entry.props.className),
+)[0];
+check('the group menu offers delete', deleteItem !== undefined, JSON.stringify(deletePass.nodes.filter((entry) => entry.kind === 'element' && /dnw-menuItem/.test(String(entry.props.className))).length));
+if (deleteItem !== undefined) deleteItem.props.onClick({ stopPropagation: () => {} });
+
+deletePass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+const deleteConfirm = deletePass.nodes.filter(
+  (entry) => entry.kind === 'element' && typeof entry.props.className === 'string' && /dnw-buttonPrimary/.test(entry.props.className),
+)[0];
+check('deleting a group asks for confirmation', deleteConfirm !== undefined);
+if (deleteConfirm !== undefined) deleteConfirm.props.onClick();
+for (let tick = 0; tick < 4; tick += 1) await Promise.resolve();
+const gonePass = renderOnce(Object.assign({}, props, { useWorkspaces: selectorHook(scopeSnapshot), useSessions: selectorHook(emptySessions) }), { keepState: true });
+check(
+  'deleting a child group removes only the record',
+  rowsOf(gonePass).every((row) => String(row.props['aria-label'] || '').indexOf('renamedgroup') === -1),
+  JSON.stringify(rowsOf(gonePass).map((row) => row.props['aria-label'])),
+);
+check('deleting a child group never calls the Host', workspacesCall.every((call) => call[0] !== 'delete'), JSON.stringify(workspacesCall));
 
 }
 
 /* ------------------------------------------------------------------ host half */
 
-/* index.js is an ES module and this harness is CommonJS, and the route
- * assertions await the handler, so the host section runs inside an async main
- * and the summary print follows it. */
+/* index.js is an ES module and this harness is CommonJS, so the host section
+ * runs inside an async main and the summary print follows it. The Host half has
+ * no work to do any more — a child workspace is a record in the browser store,
+ * so nothing is created on disk. These checks pin that down. */
 async function hostChecks() {
   const hostModule = await import(pathToFileURL(path.join(ROOT, 'index.js')).href);
-  check('host half declares the connection inject', Array.isArray(hostModule.inject) && hostModule.inject.indexOf('connection') >= 0, JSON.stringify(hostModule.inject));
   check('host half exports apply()', typeof hostModule.apply === 'function');
+  check(
+    'host half declares no service inject',
+    Array.isArray(hostModule.inject) && hostModule.inject.length === 0,
+    JSON.stringify(hostModule.inject),
+  );
 
-  const routes = [];
-  const hostEffects = [];
+  let touched = 0;
   const hostCtx = {
     connection: {
-      fetch: {
-        register: (route) => {
-          routes.push(route);
-          return async () => {};
-        },
+      get fetch() {
+        touched += 1;
+        return { register: () => async () => {} };
       },
     },
-    effect: (factory, label) => {
-      hostEffects.push({ label, dispose: factory() });
+    effect: () => {
+      touched += 1;
     },
   };
   hostModule.apply(hostCtx);
-  check('host half registers one route', routes.length === 1, 'routes=' + routes.length);
-  const hostRoute = routes[0];
-  check('route is an exact /api path', hostRoute !== undefined && /^\/api\/[A-Za-z0-9._~-]+$/.test(hostRoute.path), hostRoute && hostRoute.path);
-  check('route answers POST before creating', Array.isArray(hostRoute.methods) && hostRoute.methods.join(',') === 'POST');
-  check('host half cleans the route up on dispose', hostEffects.length === 1 && typeof hostEffects[0].dispose === 'function');
-
-  const callRoute = async (payload) => {
-    const request = {
-      method: 'POST',
-      json: async () => ({ type: 'client-request', rpcId: 'r1', method: 'nested-workspaces', payload }),
-    };
-    const response = await hostRoute.fetch(request);
-    return response.json();
-  };
-
-  /* The name validator runs before any filesystem work, so these cases are pure. */
-  const invalidNames = ['', '  ', '.', '..', 'a/b', 'a\\b'];
-  let invalidRejected = 0;
-  for (const name of invalidNames) {
-    const body = await callRoute({ action: 'createChild', parent: 'C:/repo/a', name });
-    if (body && body.result && body.result.ok === false) invalidRejected += 1;
-  }
-  check('host rejects every unusable child name', invalidRejected === invalidNames.length, invalidRejected + '/' + invalidNames.length);
-
-  const badAction = await callRoute({ action: 'nope', parent: 'C:/repo/a', name: 'x' });
-  check('host rejects an unknown action', !!(badAction && badAction.result && badAction.result.ok === false), JSON.stringify(badAction));
-  check('host wraps results in the connection envelope', !!(badAction && badAction.type === 'server-response' && badAction.rpcId === 'r1'));
-
-  const missingParent = await callRoute({ action: 'createChild', name: 'x' });
-  check('host requires a parent directory', !!(missingParent && missingParent.result && missingParent.result.ok === false));
-
-  /* The real filesystem path: create once, then collide, and prove the case the
-   * dialog maps to 「已存在」 carries the stable `directory-picker/exists` code. */
-  const scratch = await fsp.mkdtemp(path.join(os.tmpdir(), 'dnw-'));
-  try {
-    const created = await callRoute({ action: 'createChild', parent: scratch, name: 'kid' });
-    const createdPath = created && created.result && created.result.ok === true ? created.result.value.path : null;
-    check('host creates the child directory', createdPath === path.join(scratch, 'kid'), JSON.stringify(created));
-    let onDisk = false;
-    try {
-      onDisk = (await fsp.stat(createdPath)).isDirectory();
-    } catch {
-      onDisk = false;
-    }
-    check('the created child exists on disk', onDisk === true);
-
-    const collision = await callRoute({ action: 'createChild', parent: scratch, name: 'kid' });
-    check(
-      'a second child of the same name reports directory-picker/exists',
-      !!(collision && collision.result && collision.result.ok === false && collision.result.error.code === 'directory-picker/exists'),
-      JSON.stringify(collision),
-    );
-  } finally {
-    await fsp.rm(scratch, { recursive: true, force: true });
-  }
+  check('host half registers no route and no effect', touched === 0, 'touched=' + touched);
 }
 
 dragChecks()

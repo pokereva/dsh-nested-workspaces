@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Nested workspaces",
-    "description": "Nested child workspaces in the DeepSeek Harness sidebar. Create a child workspace inside its parent folder without the OS picker, drag workspaces to reorder siblings, drag sessions between workspaces, rename the section title by double-clicking, and see each session last-used time and pin marker."
+    "description": "Child workspace groups in the DeepSeek Harness sidebar. A child is recorded in the sidebar only, so no folder is created in the project; new sessions run in the nearest real workspace above the group. Drag workspaces to reorder siblings, drag sessions between groups, rename the section title by double-clicking, and see each session last-used time and pin marker."
   }
 }

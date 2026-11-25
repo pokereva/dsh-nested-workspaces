@@ -42,11 +42,12 @@ window.__ModuleLoader__.load({
         'dialog.rename.title': '重命名工作区',
         'dialog.delete.title': '删除工作区',
         'dialog.delete.description': '将把「{name}」从侧边栏移除，磁盘上的文件不会被删除。',
+        'dialog.deleteGroup.description': '将把子工作区分组「{name}」及其下级分组从侧边栏删除；其中的会话会回到它们真正所属的工作区。',
         'renamed': '已重命名',
         'deleted': '已删除工作区',
         'dialog.addChild.title': '添加子工作区',
         'dialog.addWorkspace.title': '添加工作区',
-        'dialog.addChild.description': '将在 {parent} 下创建新的子工作区目录。',
+        'dialog.addChild.description': '会在 {parent} 下新建一个子工作区分组；只在侧栏里记录，不会在磁盘上创建文件夹。',
         'dialog.addWorkspace.description': '填写工作区目录的绝对路径；留空则打开目录选择器。',
         'field.name': '子工作区名称',
         'field.path': '工作区路径（留空可选择）',
@@ -61,6 +62,7 @@ window.__ModuleLoader__.load({
         'actions.hideArchived': '隐藏已归档会话',
         'created': '已创建工作区',
         'createdChild': '已创建子工作区',
+        'virtual.hint': '分组，会话在',
         'moved': '已移动会话',
         'rail.search': '搜索',
         'expandGroup': '展开分组',
@@ -108,11 +110,12 @@ window.__ModuleLoader__.load({
         'dialog.rename.title': 'Rename workspace',
         'dialog.delete.title': 'Delete workspace',
         'dialog.delete.description': 'This removes "{name}" from the sidebar. Files on disk are kept.',
+        'dialog.deleteGroup.description': 'This removes the child workspace group "{name}" and its nested groups from the sidebar. Sessions it showed return to the workspace that owns them.',
         'renamed': 'Renamed',
         'deleted': 'Workspace deleted',
         'dialog.addChild.title': 'Add child workspace',
         'dialog.addWorkspace.title': 'Add workspace',
-        'dialog.addChild.description': 'A new child workspace directory will be created under {parent}.',
+        'dialog.addChild.description': 'Adds a child workspace group under {parent}. It is only recorded in the sidebar — no folder is created on disk.',
         'dialog.addWorkspace.description': 'Enter the absolute path of the workspace directory, or leave it empty to pick a folder.',
         'field.name': 'Child workspace name',
         'field.path': 'Workspace path (empty to pick)',
@@ -127,6 +130,7 @@ window.__ModuleLoader__.load({
         'actions.hideArchived': 'Hide archived sessions',
         'created': 'Workspace created',
         'createdChild': 'Child workspace created',
+        'virtual.hint': 'group, sessions run in',
         'moved': 'Session moved',
         'rail.search': 'Search',
         'expandGroup': 'Expand group',
@@ -174,11 +178,12 @@ window.__ModuleLoader__.load({
         'dialog.rename.title': 'ワークスペース名を変更',
         'dialog.delete.title': 'ワークスペースを削除',
         'dialog.delete.description': '「{name}」をサイドバーから削除します。ディスク上のファイルは残ります。',
+        'dialog.deleteGroup.description': '子ワークスペースのグループ「{name}」とその下位グループをサイドバーから削除します。そこに表示されていたセッションは本来のワークスペースに戻ります。',
         'renamed': '名前を変更しました',
         'deleted': 'ワークスペースを削除しました',
         'dialog.addChild.title': '子ワークスペースを追加',
         'dialog.addWorkspace.title': 'ワークスペースを追加',
-        'dialog.addChild.description': '{parent} の下に子ワークスペースを作成します。',
+        'dialog.addChild.description': '{parent} の下に子ワークスペースのグループを追加します。サイドバーに記録するだけで、ディスク上にフォルダーは作成しません。',
         'dialog.addWorkspace.description': 'ワークスペースの絶対パスを入力するか、空欄のままフォルダを選択してください。',
         'field.name': '子ワークスペース名',
         'field.path': 'ワークスペースのパス（空欄で選択）',
@@ -193,6 +198,7 @@ window.__ModuleLoader__.load({
         'actions.hideArchived': 'アーカイブ済みを隠す',
         'created': 'ワークスペースを作成しました',
         'createdChild': '子ワークスペースを作成しました',
+        'virtual.hint': 'グループ、セッションの実行先は',
         'moved': 'セッションを移動しました',
         'rail.search': '検索',
         'expandGroup': 'グループを開く',
@@ -514,9 +520,47 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** A child workspace is a record in this store, never a directory. */
+    function normalizeChildren(value) {
+      if (!Array.isArray(value)) return []
+      const seen = new Set()
+      const children = []
+      for (const entry of value) {
+        if (!isRecord(entry)) continue
+        const id = typeof entry.id === 'string' ? entry.id.trim() : ''
+        const parentId = typeof entry.parentId === 'string' ? entry.parentId.trim() : ''
+        const title = typeof entry.title === 'string' ? entry.title.trim() : ''
+        if (id === '' || parentId === '' || title === '') continue
+        if (seen.has(id)) continue
+        seen.add(id)
+        children.push({ id, parentId, title })
+      }
+      return children
+    }
+
+    function newChildId() {
+      return 'vk-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
+    }
+
+    /** Move one child record before another (or to the end of its parent run). */
+    function moveChildRecord(children, id, anchorId) {
+      const record = children.find(entry => entry.id === id)
+      if (record === undefined) return children
+      const rest = children.filter(entry => entry.id !== id)
+      if (anchorId === undefined || anchorId === null) return [...rest, record]
+      const at = rest.findIndex(entry => entry.id === anchorId)
+      if (at === -1) return [...rest, record]
+      return [...rest.slice(0, at), record, ...rest.slice(at)]
+    }
+
+    /** The child records that sit directly under one group, in stored order. */
+    function childrenOfParent(children, parentId) {
+      return children.filter(entry => entry.parentId === parentId)
+    }
+
     function createStore() {
       const read = () => {
-        const empty = { title: null, assign: {}, order: {}, collapsed: {} }
+        const empty = { title: null, assign: {}, order: {}, collapsed: {}, children: [] }
         if (typeof localStorage === 'undefined') return empty
         try {
           const raw = localStorage.getItem(STORAGE_KEY)
@@ -528,6 +572,7 @@ window.__ModuleLoader__.load({
             assign: isRecord(parsed.assign) ? parsed.assign : {},
             order: isRecord(parsed.order) ? parsed.order : {},
             collapsed: isRecord(parsed.collapsed) ? parsed.collapsed : {},
+            children: normalizeChildren(parsed.children),
           }
         } catch {
           return empty
@@ -574,6 +619,7 @@ window.__ModuleLoader__.load({
           known.add(item.workspaceId)
           if (realOwner === null && item.sessionIds.includes(sessionId)) realOwner = item.workspaceId
         }
+        for (const id of current.children) known.add(id.id)
         const assigned = current.assign[sessionId]
         const previousKey =
           typeof assigned === 'string' && known.has(assigned)
@@ -600,7 +646,7 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: ['slots', 'locale', 'contextMenus', 'workspaces', 'uiWorkspace', 'sessions', 'connection'],
+      inject: ['slots', 'locale', 'contextMenus', 'workspaces', 'uiWorkspace', 'sessions'],
       apply(ctx) {
         const store = createStore()
         const addChildRequest = createSignal(null)
@@ -627,47 +673,6 @@ window.__ModuleLoader__.load({
           }
         }
 
-        /* --------------------------------------------------- child directories */
-
-        /* The composed directory picker is a capability union: a Host whose
-         * backend is the OS chooser serves only `native`, and `createDirectory`
-         * belongs to `browse`, so it answers "needs the browse capability".
-         * Making a folder is not really browsing, so this bundle's Host half
-         * does the mkdir and answers over Connection; `createDirectory` stays
-         * as the fallback for compositions that do serve the browse backend. */
-        const CREATE_CHILD_ENDPOINT = 'nested-workspaces'
-
-        const createChildDirectory = async (parent, name) => {
-          const connection = ctx.get('connection')
-          const rpc = connection !== null && typeof connection === 'object' ? connection.rpc : null
-          if (rpc !== null && typeof rpc === 'object' && typeof rpc.call === 'function') {
-            let result = null
-            try {
-              const controller = typeof AbortController === 'function' ? new AbortController() : null
-              result = await rpc.call(
-                '/api',
-                CREATE_CHILD_ENDPOINT,
-                { action: 'createChild', parent, name },
-                controller === null ? undefined : controller.signal,
-              )
-            } catch {
-              /* Transport missing or route unregistered: fall through to the
-               * shipped picker endpoint below. */
-              result = null
-            }
-            if (result !== null && typeof result === 'object') {
-              if (result.ok === true) {
-                const value = result.value !== null && typeof result.value === 'object' ? result.value.path : undefined
-                if (typeof value === 'string' && value !== '') return value
-                throw new Error('createChild answered without a directory path')
-              } else if (result.error !== null && typeof result.error === 'object' && typeof result.error.code === 'string') {
-                throw Object.assign(new Error(String(result.error.message || result.error.code)), { code: result.error.code })
-              }
-            }
-          }
-          return uiWorkspace.createDirectory(parent, name)
-        }
-
         /* ------------------------------------------------------- context menus */
 
         ctx.effect(
@@ -685,7 +690,7 @@ window.__ModuleLoader__.load({
                   run: () => {
                     addChildRequest.set({
                       parentId: target.workspaceId,
-                      parentPath: target.path,
+                      parentPath: null,
                       parentTitle: target.displayTitle,
                     })
                   },
@@ -727,6 +732,18 @@ window.__ModuleLoader__.load({
                     notify(ctx.locale.bind(NS)('moved'), true)
                   },
                 }))
+                /* Virtual child groups are this plugin's own records, so they are
+                 * listed from the store rather than from the workspace list. */
+                for (const record of store.get().children) {
+                  children.push({
+                    id: 'move:' + record.id,
+                    label: record.title,
+                    run: () => {
+                      assignSessionIn(store, items, sessionId, record.id, undefined)
+                      notify(ctx.locale.bind(NS)('moved'), true)
+                    },
+                  })
+                }
                 children.push({
                   id: 'move:ungrouped',
                   label: ctx.locale.bind(NS)('ungrouped'),
@@ -757,7 +774,9 @@ window.__ModuleLoader__.load({
 
         function NewWorkspaceDialog(props) {
           const request = props.request
-          const isChild = typeof request.parentPath === 'string'
+          /* A request carries `parentId` for a child group; a top-level "add
+           * workspace" leaves it null and asks for a real directory instead. */
+          const isChild = typeof request.parentId === 'string' && request.parentId !== ''
           const [value, setValue] = useState('')
           const [busy, setBusy] = useState(false)
           const [error, setError] = useState(null)
@@ -801,10 +820,22 @@ window.__ModuleLoader__.load({
             setBusy(true)
             setError(null)
             try {
-              let path = trimmed
+              /* A child workspace is a record in this plugin's store — no folder,
+               * no Host registration. Its sessions run in the nearest real
+               * ancestor, which is why nothing needs to be created on disk. */
               if (isChild) {
-                path = await createChildDirectory(request.parentPath, trimmed)
-              } else if (path === '') {
+                const id = newChildId()
+                store.update(state => ({
+                  ...state,
+                  children: [...state.children, { id, parentId: request.parentId, title: trimmed }],
+                  collapsed: { ...state.collapsed, [request.parentId]: false },
+                }))
+                notify(t('createdChild'), true)
+                props.onClose()
+                return
+              }
+              let path = trimmed
+              if (path === '') {
                 /* No typed path: ask the host's directory picker, which is the
                  * same flow the shipped picker uses. */
                 const picked = await uiWorkspace.pickDirectory()
@@ -814,28 +845,8 @@ window.__ModuleLoader__.load({
                 setValue(picked)
                 setBusy(true)
               }
-              const created = await workspaces.create({ path })
-              if (isChild) {
-                store.update(state => ({
-                  ...state,
-                  collapsed: { ...state.collapsed, [request.parentId]: false },
-                }))
-                /* Land the new child at the TOP of its siblings instead of below
-                 * them. The Host appends new registrations after the existing
-                 * ones, so anchor the new workspace to the first sibling that is
-                 * already registered under the same parent. */
-                const createdId = created && created.workspaceId ? created.workspaceId : null
-                if (createdId !== null) {
-                  const snapshot = workspaces.list.getSnapshot()
-                  const siblings = snapshot.items
-                    .filter(item => item.workspaceId !== createdId)
-                    .filter(item => owningParentPath(item.path, snapshot.items.map(entry => entry.path)) === request.parentPath)
-                  if (siblings.length > 0) await workspaces.insertBefore(createdId, siblings[0].workspaceId).catch(() => {})
-                }
-                notify(t('createdChild'), true)
-              } else {
-                notify(t('created'), true)
-              }
+              await workspaces.create({ path })
+              notify(t('created'), true)
               props.onClose()
             } catch (failure) {
               setError(describe(failure))
@@ -849,7 +860,7 @@ window.__ModuleLoader__.load({
             {
               title: isChild ? t('dialog.addChild.title') : t('dialog.addWorkspace.title'),
               description: isChild
-                ? t('dialog.addChild.description', { parent: request.parentPath })
+                ? t('dialog.addChild.description', { parent: request.parentTitle })
                 : t('dialog.addWorkspace.description'),
               error,
               busy,
@@ -1153,6 +1164,18 @@ window.__ModuleLoader__.load({
             setBusy(true)
             setError(null)
             try {
+              /* A virtual group has no Host record; its title lives here. */
+              if (workspace.virtual) {
+                store.update(current => ({
+                  ...current,
+                  children: current.children.map(entry =>
+                    entry.id === workspace.workspaceId ? { ...entry, title: trimmed } : entry,
+                  ),
+                }))
+                notify(t('renamed'), true)
+                onClose()
+                return
+              }
               await workspaces.rename(workspace.workspaceId, trimmed)
               notify(t('renamed'), true)
               onClose()
@@ -1206,6 +1229,35 @@ window.__ModuleLoader__.load({
             setBusy(true)
             setError(null)
             try {
+              if (workspace.virtual) {
+                /* Drop the record and its subtree; sessions filed under it fall
+                 * back to their real workspace because their assignment is gone. */
+                const doomed = new Set([workspace.workspaceId])
+                let grew = true
+                while (grew) {
+                  grew = false
+                  for (const entry of store.get().children) {
+                    if (doomed.has(entry.parentId) && !doomed.has(entry.id)) {
+                      doomed.add(entry.id)
+                      grew = true
+                    }
+                  }
+                }
+                store.update(current => {
+                  const assign = { ...current.assign }
+                  for (const [sessionId, groupKey] of Object.entries(assign)) {
+                    if (doomed.has(groupKey)) delete assign[sessionId]
+                  }
+                  return {
+                    ...current,
+                    children: current.children.filter(entry => !doomed.has(entry.id)),
+                    assign,
+                  }
+                })
+                notify(t('deleted'), true)
+                onClose()
+                return
+              }
               await workspaces.delete(workspace.workspaceId)
               notify(t('deleted'), true)
               onClose()
@@ -1218,7 +1270,9 @@ window.__ModuleLoader__.load({
 
           return h(DialogShell, {
             title: t('dialog.delete.title'),
-            description: t('dialog.delete.description', { name: workspace.title }),
+            description: workspace.virtual === true
+              ? t('dialog.deleteGroup.description', { name: workspace.title })
+              : t('dialog.delete.description', { name: workspace.title }),
             error,
             busy,
             danger: true,
@@ -1463,7 +1517,7 @@ window.__ModuleLoader__.load({
 
         function WorkspaceGroup(props) {
           const { workspace, depth, env } = props
-          const { view, state, t, uiWorkspace, useWorkspaceAccess, openMenu, openWorkspaceMenu, assignSession, setExpanded, setRenaming, menu, dragIdRef, draggingId, dropTarget, setDropTarget, setDraggingId, workspaceDrag, draggingWorkspaceId, beginWorkspaceDrag, endWorkspaceDrag, hoverWorkspaceDrag, workspaceClickBlockRef } = env
+          const { view, state, t, uiWorkspace, useWorkspaceAccess, openMenu, openWorkspaceMenu, assignSession, startSessionInGroup, setExpanded, setRenaming, menu, dragIdRef, draggingId, dropTarget, setDropTarget, setDraggingId, workspaceDrag, draggingWorkspaceId, beginWorkspaceDrag, endWorkspaceDrag, hoverWorkspaceDrag, workspaceClickBlockRef } = env
           const workspaceId = workspace.workspaceId
           const collapsed = state.collapsed[workspaceId] === true
           const members = view.members.get(workspaceId) || []
@@ -1475,7 +1529,11 @@ window.__ModuleLoader__.load({
           const isDropTarget =
             dropTarget !== null && dropTarget.workspaceId === workspaceId && dropTarget.sessionId === undefined
           const indent = { '--dnw-indent': depth * INDENT_PX + 'px' }
-          const canCreateSession = useWorkspaceAccess(workspaceId, 'session/create')
+          /* A virtual group has no directory of its own: access and new sessions
+           * belong to the nearest real ancestor, which is where it runs. */
+          const realId = view.realOf.get(workspaceId)
+          const accessId = realId === undefined ? workspaceId : realId
+          const canCreateSession = useWorkspaceAccess(accessId, 'session/create')
           const collapsible = children.length > 0 || hasSessions
           /* A workspace drag is legal only between rows that share a parent, so a
            * child can be reordered among its siblings but never leave its root. */
@@ -1504,7 +1562,9 @@ window.__ModuleLoader__.load({
               tabIndex: 0,
               draggable: true,
               'aria-expanded': !collapsed,
-              'aria-label': workspace.title + ' — ' + workspace.path,
+              'aria-label': workspace.virtual
+                ? workspace.title + ' — ' + t('virtual.hint') + ' ' + workspace.path
+                : workspace.title + ' — ' + workspace.path,
               style: indent,
               onClick: () => {
                 /* A drag ends with a click; expanding on it would undo the drop. */
@@ -1652,7 +1712,7 @@ window.__ModuleLoader__.load({
                       'aria-label': t('actions.newSession') + ' ' + workspace.title,
                       onClick: event => {
                         event.stopPropagation()
-                        uiWorkspace.startSession(workspaceId)
+                        startSessionInGroup(workspaceId, accessId)
                       },
                     },
                     h(IconPlus, null),
@@ -1732,24 +1792,89 @@ window.__ModuleLoader__.load({
             const byId = new Map(items.map(item => [item.workspaceId, item]))
             const byPath = new Map(items.map(item => [item.path, item.workspaceId]))
             const paths = items.map(item => item.path)
-            const parentOf = new Map()
+
+            /* Real workspaces nest by path ancestry. */
+            const realParentOf = new Map()
             for (const item of items) {
               const parentPath = owningParentPath(item.path, paths)
               if (parentPath === null) continue
               const parentId = byPath.get(parentPath)
-              if (parentId !== undefined) parentOf.set(item.workspaceId, parentId)
+              if (parentId !== undefined) realParentOf.set(item.workspaceId, parentId)
             }
+
+            const realOf = new Map()
+            const realIdOf = parentId => {
+              let cursor = parentId
+              for (let guard = 0; cursor !== undefined && guard < 64; guard += 1) {
+                const real = realOf.get(cursor)
+                if (real !== undefined) return real
+                cursor = parentOf.get(cursor)
+              }
+              return undefined
+            }
+
+            const parentOf = new Map(realParentOf)
+            const nodesById = new Map()
+            for (const item of items) {
+              nodesById.set(item.workspaceId, {
+                workspaceId: item.workspaceId,
+                title: item.title,
+                path: item.path,
+                virtual: false,
+                parentId: realParentOf.get(item.workspaceId),
+              })
+              realOf.set(item.workspaceId, item.workspaceId)
+            }
+
+            /* Virtual children: records only. Their `path` is the nearest real
+             * ancestor's directory, because that is where a session started
+             * from them actually runs. Records are stored flat, so resolve them
+             * to a fixpoint: a record whose parent is another record only lands
+             * once that parent is known. */
+            let pending = state.children.slice()
+            for (let pass = 0; pass < 64 && pending.length > 0; pass += 1) {
+              const deferred = []
+              let placed = 0
+              for (const record of pending) {
+                const parent = nodesById.get(record.parentId)
+                if (parent === undefined) {
+                  deferred.push(record)
+                  continue
+                }
+                placed += 1
+                parentOf.set(record.id, record.parentId)
+                const realId = parent.virtual ? realIdOf(record.parentId) : parent.workspaceId
+                nodesById.set(record.id, {
+                  workspaceId: record.id,
+                  title: record.title,
+                  path: realId === undefined ? parent.path : (byId.get(realId) || parent).path,
+                  virtual: true,
+                  parentId: record.parentId,
+                })
+                if (realId !== undefined) realOf.set(record.id, realId)
+              }
+              pending = deferred
+              if (placed === 0) break
+            }
+
             const childrenOf = new Map()
             const roots = []
             for (const item of items) {
-              const parentId = parentOf.get(item.workspaceId)
+              const parentId = realParentOf.get(item.workspaceId)
               if (parentId === undefined) {
-                roots.push(item)
+                roots.push(nodesById.get(item.workspaceId))
                 continue
               }
               const bucket = childrenOf.get(parentId)
-              if (bucket === undefined) childrenOf.set(parentId, [item])
-              else bucket.push(item)
+              if (bucket === undefined) childrenOf.set(parentId, [nodesById.get(item.workspaceId)])
+              else bucket.push(nodesById.get(item.workspaceId))
+            }
+            for (const record of state.children) {
+              const node = nodesById.get(record.id)
+              if (node === undefined) continue
+              const bucket = childrenOf.get(record.parentId)
+              if (bucket === undefined) childrenOf.set(record.parentId, [node])
+              else bucket.push(node)
             }
 
             const archived = new Set(workspaceSnapshot.archivedSessionIds)
@@ -1760,14 +1885,16 @@ window.__ModuleLoader__.load({
 
             const ownerOf = id => {
               const assigned = state.assign[id]
-              if (typeof assigned === 'string' && byId.has(assigned)) return assigned
+              if (typeof assigned === 'string' && nodesById.has(assigned)) return assigned
               const real = realOwner.get(id)
-              return real === undefined ? UNGROUPED : real
+              if (real === undefined) return UNGROUPED
+              /* A session whose real workspace is not visible belongs to no group */
+              return nodesById.has(real) ? real : UNGROUPED
             }
 
             const members = new Map()
             members.set(UNGROUPED, [])
-            for (const item of items) members.set(item.workspaceId, [])
+            for (const nodeId of nodesById.keys()) members.set(nodeId, [])
 
             const needle = query.trim().toLowerCase()
             const matches = text => needle === '' || String(text || '').toLowerCase().includes(needle)
@@ -1823,8 +1950,8 @@ window.__ModuleLoader__.load({
             let visibleCount = 0
             for (const bucket of members.values()) visibleCount += bucket.length
 
-            return { byId, parentOf, childrenOf, roots, members, currentId, ownerOf, realOwner, archived, pinned, filtering, visibleCount }
-          }, [items, list, state.order, state.assign, workspaceSnapshot.archivedSessionIds, workspaceSnapshot.pinnedSessionIds, query, showArchived])
+            return { byId, nodesById, parentOf, childrenOf, roots, members, currentId, ownerOf, realOwner, realOf, archived, pinned, filtering, visibleCount }
+          }, [items, list, state.order, state.assign, state.children, workspaceSnapshot.archivedSessionIds, workspaceSnapshot.pinnedSessionIds, query, showArchived])
 
           const setExpanded = useCallback((workspaceId, expanded) => {
             store.update(current => ({
@@ -1835,21 +1962,34 @@ window.__ModuleLoader__.load({
 
           /* Workspace reorder. Mirrors the shipped `commitWorkspaceDrag`: the drop
            * anchor is the next row after the target, and a move that would leave
-           * the order unchanged is dropped instead of being sent to the Host. */
+           * the order unchanged is dropped instead of being written.
+           * A virtual group is ordered in this plugin's own store, a real
+           * workspace in the Host registry, so the two are never mixed. */
           const commitWorkspaceDrag = useCallback(
             (drag, over) => {
               if (drag === null || over === null) return
+              const dragged = view.nodesById.get(drag.workspaceId)
+              const target = view.nodesById.get(over.id)
+              if (dragged === undefined || target === undefined) return
               const owner = view.parentOf.get(drag.workspaceId)
-              if (over !== null && view.parentOf.get(over.id) !== owner) return
-              const siblings = items.filter(item => view.parentOf.get(item.workspaceId) === owner)
-              const rowIndex = siblings.findIndex(item => item.workspaceId === over.id)
+              if (view.parentOf.get(over.id) !== owner) return
+              /* Mixing the plugin order with the Host order would need a position
+               * neither store can express, so a cross-kind drop is refused. */
+              if (dragged.virtual !== target.virtual) return
+              const siblings =
+                owner === undefined ? view.roots.slice() : (view.childrenOf.get(owner) || []).slice()
+              const rowIndex = siblings.findIndex(node => node.workspaceId === over.id)
               if (rowIndex === -1) return
               const anchor = over.half === 'before' ? over.id : (siblings[rowIndex + 1] || {}).workspaceId
               if (anchor === drag.workspaceId) return
-              const sourceIndex = siblings.findIndex(item => item.workspaceId === drag.workspaceId)
+              const sourceIndex = siblings.findIndex(node => node.workspaceId === drag.workspaceId)
               const anchorIndex =
-                anchor === undefined ? siblings.length : siblings.findIndex(item => item.workspaceId === anchor)
+                anchor === undefined ? siblings.length : siblings.findIndex(node => node.workspaceId === anchor)
               if (sourceIndex !== -1 && (anchorIndex === sourceIndex || anchorIndex === sourceIndex + 1)) return
+              if (dragged.virtual) {
+                store.update(current => ({ ...current, children: moveChildRecord(current.children, drag.workspaceId, anchor) }))
+                return
+              }
               workspaces.insertBefore(drag.workspaceId, anchor).catch(() => {
                 notify(t('errors.reorderFailed'), false)
               })
@@ -1920,6 +2060,35 @@ window.__ModuleLoader__.load({
             [view],
           )
 
+          /**
+           * New session for a row. A real workspace opens its own blank. A
+           * virtual group has no directory, so the session is created in the
+           * nearest real ancestor and then filed into the group — the same
+           * display assignment a drag writes, only done right after creation.
+           */
+          const startSessionInGroup = useCallback(
+            (groupId, realId) => {
+              const node = view.nodesById.get(groupId)
+              if (node === undefined || node.virtual !== true) {
+                uiWorkspace.startSession(realId === undefined ? groupId : realId)
+                return
+              }
+              if (realId === undefined) {
+                uiWorkspace.startSession()
+                return
+              }
+              void uiWorkspace
+                .openWorkspace(realId, sessionId => {
+                  assignSession(sessionId, groupId, undefined)
+                })
+                .catch(failure => {
+                  const message = failure && failure.message ? String(failure.message) : String(failure)
+                  notify(t('errors.createFailed', { message }), false)
+                })
+            },
+            [view, uiWorkspace, assignSession, notify, t],
+          )
+
           const openMenu = (target, label) => {
             if (typeof renderFactorySlot !== 'function') return null
             const node = renderFactorySlot('contextMenu.button', { target, label, className: 'dnw-iconButton' })
@@ -1940,11 +2109,12 @@ window.__ModuleLoader__.load({
             })
           }
 
-          const menuWorkspace =
-            menu === null ? null : items.find(item => item.workspaceId === menu.workspaceId) || null
+          const menuWorkspace = menu === null ? null : view.nodesById.get(menu.workspaceId) || null
 
           const menuItems = useMemo(() => {
             if (menuWorkspace === null) return []
+            const groupId = menuWorkspace.workspaceId
+            const realId = view.realOf.get(groupId)
             return [
               {
                 id: 'addChild',
@@ -1952,8 +2122,8 @@ window.__ModuleLoader__.load({
                 icon: IconFolderPlus,
                 onSelect: () =>
                   addChildRequest.set({
-                    parentId: menuWorkspace.workspaceId,
-                    parentPath: menuWorkspace.path,
+                    parentId: groupId,
+                    parentPath: null,
                     parentTitle: menuWorkspace.title,
                   }),
               },
@@ -1961,7 +2131,7 @@ window.__ModuleLoader__.load({
                 id: 'newSession',
                 label: t('actions.newSession'),
                 icon: IconPlus,
-                onSelect: () => uiWorkspace.startSession(menuWorkspace.workspaceId),
+                onSelect: () => startSessionInGroup(groupId, realId),
               },
               {
                 id: 'rename',
@@ -1978,7 +2148,7 @@ window.__ModuleLoader__.load({
                 onSelect: () => setDeleting(menuWorkspace),
               },
             ]
-          }, [menuWorkspace, t, uiWorkspace])
+          }, [menuWorkspace, t, view, startSessionInGroup])
 
           const commitTitle = () => {
             /* Escape sets the cancel flag first; the input then unmounts and its
@@ -2031,7 +2201,7 @@ window.__ModuleLoader__.load({
           const env = {
             view, state, statuses, t, uiWorkspace, list,
             useSessionAccess, useWorkspaceAccess,
-            openMenu, openWorkspaceMenu, assignSession, setExpanded, setRenaming,
+            openMenu, openWorkspaceMenu, assignSession, startSessionInGroup, setExpanded, setRenaming,
             menu, menuOpenSessionId, draggingId, dropTarget, dragIdRef, setDraggingId, setDropTarget,
             workspaceDrag, draggingWorkspaceId: workspaceDrag === null ? null : workspaceDrag.workspaceId,
             beginWorkspaceDrag, hoverWorkspaceDrag, endWorkspaceDrag, workspaceClickBlockRef,
